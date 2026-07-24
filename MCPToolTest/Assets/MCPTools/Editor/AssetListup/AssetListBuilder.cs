@@ -185,6 +185,35 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
+        /// 저장해 둔 목록 JSON을 불러옵니다. 이어서 편집(항목 추가/수정/삭제)한 뒤
+        /// 같은 경로로 <see cref="Save"/>하면 덮어쓸 수 있습니다.
+        /// </summary>
+        /// <param name="assetListPath">목록 JSON 경로 (Assets/ 기준 상대 경로).</param>
+        /// <returns>로드된 문서.</returns>
+        /// <exception cref="FileNotFoundException">파일이 존재하지 않는 경우.</exception>
+        /// <exception cref="FormatException">JSON을 목록 문서로 해석할 수 없는 경우.</exception>
+        public static AssetListDocument Load(string assetListPath)
+        {
+            if (string.IsNullOrEmpty(assetListPath) || !File.Exists(assetListPath))
+            {
+                throw new FileNotFoundException(
+                    $"목록 JSON 파일을 찾을 수 없습니다: {assetListPath}");
+            }
+
+            var dict = MiniJson.Deserialize(File.ReadAllText(assetListPath)) as Dictionary<string, object>;
+            AssetListDocument doc = AssetListDocument.FromDictionary(dict);
+            if (doc == null)
+            {
+                throw new FormatException(
+                    $"목록 JSON을 해석할 수 없습니다: {assetListPath}\n" +
+                    "1단계에서 저장한 AssetList_*.json인지 확인해주세요.");
+            }
+
+            // 항목이 0개인 문서는 오류가 아니다 (빈 목록을 저장했다가 다시 채우는 흐름을 허용).
+            return doc;
+        }
+
+        /// <summary>
         /// 문서를 JSON으로 저장합니다. 폴더가 없으면 생성하고 저장 후 AssetDatabase에 반영합니다.
         /// </summary>
         /// <param name="doc">저장할 문서.</param>
@@ -195,7 +224,7 @@ namespace MCPTools.Editor
             if (string.IsNullOrEmpty(outputPath))
             {
                 MCPToolSettings settings = MCPToolSettings.GetOrCreate();
-                outputPath = $"{settings.docsRootPath}/AssetList_{DateTime.Now:yyyyMMdd_HHmm}.json";
+                outputPath = $"{MCPToolFolders.AssetListDir(settings)}/AssetList_{DateTime.Now:yyyyMMdd_HHmm}.json";
             }
 
             outputPath = outputPath.Replace('\\', '/');

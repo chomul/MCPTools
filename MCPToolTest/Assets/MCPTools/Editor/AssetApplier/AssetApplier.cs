@@ -50,7 +50,7 @@ namespace MCPTools.Editor
         /// <summary>
         /// 항목의 확정본 에셋 경로를 자동 탐색합니다.
         /// GenerationResults.json의 outputPath 기록을 우선 사용하고,
-        /// 없으면 규칙 경로(Assets/Generated/Images/{id}.png, Audio/{id}.*)를 탐색합니다.
+        /// 없으면 규칙 경로(Assets/Generated/3_Confirmed/Images/{id}.png, Audio/{id}.*, 구 위치도 함께 탐색)를 탐색합니다.
         /// </summary>
         /// <param name="settings">설정 객체.</param>
         /// <param name="item">대상 항목.</param>
@@ -62,10 +62,8 @@ namespace MCPTools.Editor
                 return null;
             }
 
-            string root = settings.generatedRootPath.TrimEnd('/');
-
-            // 1) GenerationResults.json 기록 우선
-            string resultsPath = $"{root}/{CandidateGenerator.ResultsFileName}";
+            // 1) GenerationResults.json 기록 우선 (새 위치 3_Confirmed/ → 없으면 구 위치)
+            string resultsPath = CandidateGenerator.ResolveResultsPathForRead(settings);
             if (File.Exists(resultsPath))
             {
                 var doc = MiniJson.Deserialize(File.ReadAllText(resultsPath)) as Dictionary<string, object>;
@@ -89,28 +87,35 @@ namespace MCPTools.Editor
                 }
             }
 
-            // 2) 규칙 경로 폴백
-            if (item.assetType == "audio")
+            // 2) 규칙 경로 폴백 — 새 확정본 폴더를 먼저 보고, 없으면 구 위치(생성 루트 바로 아래)를 본다.
+            foreach (string confirmedRoot in new[]
+                     {
+                         MCPToolFolders.ConfirmedRoot(settings),
+                         MCPToolFolders.GeneratedRoot(settings)
+                     })
             {
-                string audioFolder = $"{root}/Audio";
-                if (Directory.Exists(audioFolder))
+                if (item.assetType == "audio")
                 {
-                    foreach (string ext in new[] { ".flac", ".wav", ".mp3", ".ogg" })
+                    string audioFolder = $"{confirmedRoot}/Audio";
+                    if (Directory.Exists(audioFolder))
                     {
-                        string path = $"{audioFolder}/{item.id}{ext}";
-                        if (File.Exists(path))
+                        foreach (string ext in new[] { ".flac", ".wav", ".mp3", ".ogg" })
                         {
-                            return path;
+                            string path = $"{audioFolder}/{item.id}{ext}";
+                            if (File.Exists(path))
+                            {
+                                return path;
+                            }
                         }
                     }
                 }
-            }
-            else
-            {
-                string imagePath = $"{root}/Images/{item.id}.png";
-                if (File.Exists(imagePath))
+                else
                 {
-                    return imagePath;
+                    string imagePath = $"{confirmedRoot}/Images/{item.id}.png";
+                    if (File.Exists(imagePath))
+                    {
+                        return imagePath;
+                    }
                 }
             }
 

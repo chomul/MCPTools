@@ -148,7 +148,7 @@ namespace MCPTools.Editor
         public class Parameters
         {
             /// <summary>1단계 산출물 AssetList JSON 경로.</summary>
-            [ToolParameter("1단계 산출물 AssetList JSON 경로 (Assets/ 기준 상대 경로, 예: Assets/Docs/AssetList_20260721_1200.json).", Required = true)]
+            [ToolParameter("1단계 산출물 AssetList JSON 경로 (Assets/ 기준 상대 경로, 예: Assets/Docs/1_AssetList/AssetList_20260721_1200.json).", Required = true)]
             public string assetListPath { get; set; }
 
             /// <summary>프롬프트 템플릿 이름.</summary>
@@ -187,7 +187,7 @@ namespace MCPTools.Editor
             public string assetListPath { get; set; }
 
             /// <summary>PromptSet JSON 저장 경로 (Assets/ 기준 상대 경로).</summary>
-            [ToolParameter("PromptSet JSON 저장 경로 (Assets/ 기준 상대 경로). 생략하면 기본 경로(Assets/Docs/PromptSet_{시각}.json)에 저장합니다.", Required = false)]
+            [ToolParameter("PromptSet JSON 저장 경로 (Assets/ 기준 상대 경로). 생략하면 기본 경로(Assets/Docs/2_PromptSet/PromptSet_{시각}.json)에 저장합니다.", Required = false)]
             public string outputPath { get; set; }
 
             /// <summary>문서 메타에 기록할 템플릿 이름.</summary>
@@ -210,7 +210,7 @@ namespace MCPTools.Editor
     /// </summary>
     [McpForUnityTool("mcptools_generate_candidates",
         Description = "3단계 후보 생성 Job을 브리지 서버 경유로 시작합니다 (비동기, 완료까지 기다리지 않음). 기준 시드부터 " +
-                      "+1씩 증가시키며 후보를 생성해 Assets/Generated/Candidates/{assetItemId}/에 저장합니다. " +
+                      "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{assetItemId}/에 저장합니다. " +
                       "완료 여부와 결과는 mcptools_list_candidates로 폴링하세요. " +
                       "파라미터: promptSetPath(필수), assetItemId(필수), " +
                       "workflowName(선택: GenerateImage|GenerateImageFlux|UI|StyleChange|Audio), " +
@@ -283,7 +283,7 @@ namespace MCPTools.Editor
     /// 선택한 후보를 확정 경로로 복사하고 임포트 설정을 적용합니다.
     /// </summary>
     [McpForUnityTool("mcptools_select_candidate",
-        Description = "3단계 후보 1개를 확정합니다: Assets/Generated/Images/(오디오는 Audio/)로 복사하고 " +
+        Description = "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/Images/(오디오는 Audio/)로 복사하고 " +
                       "GenerationResults.json에 기록하며, 이미지 항목은 Sprite 임포트 설정을 적용합니다. " +
                       "파라미터: assetItemId(필수), candidatePath(필수).")]
     public static class McpToolsSelectCandidateTool
@@ -332,7 +332,7 @@ namespace MCPTools.Editor
 
             /// <summary>적용할 에셋 경로.</summary>
             [ToolParameter("적용할 에셋 경로 (Assets/ 기준 상대 경로). 생략하면 GenerationResults.json 기록과 " +
-                           "Assets/Generated/Images(Audio)/{id}.* 규칙 경로에서 확정본을 자동 탐색합니다.", Required = false)]
+                           "Assets/Generated/3_Confirmed/Images(Audio)/{id}.* 규칙 경로에서 확정본을 자동 탐색합니다.", Required = false)]
             public string assetPath { get; set; }
         }
 
@@ -421,7 +421,7 @@ namespace MCPTools.Editor
     /// </summary>
     [McpForUnityTool("mcptools_status",
         Description = "MCP Tools 진단: 설정값(ComfyUI/브리지 주소, 경로, 후보 개수), 산출물 현황(AssetList/PromptSet 개수·최신 파일, " +
-                      "Generated/Images·Audio·Candidates 개수, 확정 항목 수), 버전·Unity 버전을 반환합니다. " +
+                      "3_Confirmed/Images·Audio 및 3_Candidates 개수, 확정 항목 수), 버전·Unity 버전을 반환합니다. " +
                       "서버 실시간 연결 확인은 하지 않습니다(3단계 창/브리지 /health 참조). 파라미터: 없음.")]
     public static class McpToolsStatusTool
     {
@@ -503,7 +503,7 @@ namespace MCPTools.Editor
     [McpForUnityTool("mcptools_spritesheet_import",
         Description = "외부 AI가 생성한 멀티 행 스프라이트 시트 png를 격자선 기준으로 슬라이스합니다. 배경 모드가 white면 " +
                       "외곽 시드 BFS로 배경을 투명화(유채색 글로우 이펙트 보존)한 뒤 시트에 그려진 격자선을 직접 검출해 " +
-                      "균일 셀 경계를 만들고 재조립 없이 원본 셀 위치 그대로 Assets/Generated/Images/{name}_sheet.png로 저장하고 " +
+                      "균일 셀 경계를 만들고 재조립 없이 원본 셀 위치 그대로 Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png로 저장하고 " +
                       "행 동작명 기반(walk_01~) Sprite Mode=Multiple 슬라이스를 적용합니다. 격자선이 곧 정답이므로 행/프레임 수가 " +
                       "rows와 달라도 검출된 격자 그대로 임포트합니다. " +
                       "파라미터: imagePath(필수, 절대 또는 Assets/ 상대 png), rows(필수, \"walk:8,run:8,attack:8,death:10\" 형식 — " +

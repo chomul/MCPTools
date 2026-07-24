@@ -157,7 +157,7 @@ namespace MCPTools.Editor
             if (string.IsNullOrEmpty(outputPath))
             {
                 MCPToolSettings settings = MCPToolSettings.GetOrCreate();
-                outputPath = $"{settings.docsRootPath}/PromptSet_{DateTime.Now:yyyyMMdd_HHmm}.json";
+                outputPath = $"{MCPToolFolders.PromptSetDir(settings)}/PromptSet_{DateTime.Now:yyyyMMdd_HHmm}.json";
             }
 
             outputPath = outputPath.Replace('\\', '/');

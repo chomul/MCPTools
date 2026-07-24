@@ -116,7 +116,7 @@ namespace MCPTools.Editor
         private const float GridLineSpanRatio = 0.6f;
 
         /// <summary>
-        /// 멀티 행 시트 이미지를 격자선 기준으로 슬라이스해 <c>Assets/Generated/Images/{name}_sheet.png</c>로 저장하고
+        /// 멀티 행 시트 이미지를 격자선 기준으로 슬라이스해 <c>Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png</c>로 저장하고
         /// Sprite Multiple 슬라이스(행별 동작명 기반 <c>walk_01</c>~ 이름)를 적용합니다.
         /// 격자선이 곧 정답이므로 행/프레임 수가 행 정의와 달라도 검출된 격자 그대로 임포트합니다
         /// (행 이름은 순서대로 행 정의의 동작명, 초과 행은 <c>row5</c> 같은 자동 이름).
@@ -993,8 +993,11 @@ namespace MCPTools.Editor
         private static string SaveSheet(Color32[] sheet, int width, int height, string baseName)
         {
             MCPToolSettings settings = MCPToolSettings.GetOrCreate();
-            string root = string.IsNullOrEmpty(settings.generatedRootPath) ? "Assets/Generated" : settings.generatedRootPath;
-            string folder = $"{root}/Images".Replace('\\', '/');
+            string folder = MCPToolFolders.SpriteSheetsDir(settings);
+
+            // 폴더를 이번에 처음 만들면 AssetDatabase가 그 폴더를 모르므로 ImportAsset이 먹히지 않고,
+            // 뒤이은 ApplySpriteSlices의 GetAtPath가 null이 되어 슬라이스가 실패한다. Refresh로 반영한다.
+            bool createdFolder = !Directory.Exists(Path.GetFullPath(folder));
             Directory.CreateDirectory(Path.GetFullPath(folder));
 
             string safeName = string.IsNullOrEmpty(baseName) ? "spritesheet" : baseName;
@@ -1012,7 +1015,15 @@ namespace MCPTools.Editor
                 UnityEngine.Object.DestroyImmediate(texture);
             }
 
-            AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            if (createdFolder)
+            {
+                AssetDatabase.Refresh();
+            }
+            else
+            {
+                AssetDatabase.ImportAsset(assetPath, ImportAssetOptions.ForceUpdate);
+            }
+
             return assetPath;
         }
 

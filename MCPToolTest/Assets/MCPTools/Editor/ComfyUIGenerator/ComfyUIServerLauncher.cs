@@ -180,6 +180,10 @@ namespace MCPTools.Editor
         [InitializeOnLoadMethod]
         private static void ScheduleBridgeIdentityCheck()
         {
+            // 에디터 종료 시 브리지 정리도 여기서 함께 등록한다 (구독은 도메인 단위라 중복되지 않는다).
+            EditorApplication.quitting -= OnEditorQuitting;
+            EditorApplication.quitting += OnEditorQuitting;
+
             if (SessionState.GetBool(SessionKeyIdentityChecked, false))
             {
                 return;
@@ -585,6 +589,43 @@ namespace MCPTools.Editor
             UnityEngine.Debug.Log(string.IsNullOrEmpty(logPath)
                 ? $"[MCPTools] 브리지 서버를 시작했습니다 (PID {process.Id}, 포트 {port}{versionNote}, 실행 파일 {python})."
                 : $"[MCPTools] 브리지 서버를 시작했습니다 (PID {process.Id}, 포트 {port}{versionNote}, 실행 파일 {python}, 로그: {logPath}).");
+        }
+
+        /// <summary>
+        /// 에디터 종료 직전에 이 도구로 시작한 브리지 서버를 정리합니다.
+        /// 남겨두면 다음 에디터 실행이나 다른 프로젝트에서 포트를 점유한 채 제어할 수 없는 상태가 됩니다(D18).
+        /// 외부에서 직접 실행한 서버나 다른 프로젝트가 띄운 서버는 PID를 모르므로 건드리지 않습니다.
+        /// </summary>
+        private static void OnEditorQuitting()
+        {
+            if (!IsLaunchedProcessAlive())
+            {
+                return;
+            }
+
+            // 설정 로드 자체가 실패해도(에셋 임포트 중 종료 등) 종료 흐름을 막지 않는다.
+            try
+            {
+                if (!MCPToolSettings.GetOrCreate().shutdownBridgeOnEditorQuit)
+                {
+                    return;
+                }
+            }
+            catch (Exception)
+            {
+                // 설정을 읽을 수 없으면 기본 동작(종료)을 따른다.
+            }
+
+            try
+            {
+                Stop();
+            }
+            catch (Exception e)
+            {
+                // 종료 중이라 다이얼로그는 띄울 수 없다. 로그만 남긴다.
+                UnityEngine.Debug.LogWarning(
+                    $"[MCPTools] 에디터 종료 시 브리지 서버를 정리하지 못했습니다: {e.Message}");
+            }
         }
 
         /// <summary>

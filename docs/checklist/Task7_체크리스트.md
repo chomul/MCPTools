@@ -71,10 +71,14 @@
     - **preflight의 코어/커스텀 자동 구분은 구현하지 않음** — `compute_missing_nodes`는 이름 목록만 반환한다. 대신 README에서 "목록의 이름이 커스텀 노드 목록에 없으면 코어 노드일 가능성이 높다"는 사용자 판단 방법으로 대체. 코어 노드 목록을 브리지가 알 방법이 없어(ComfyUI가 구분해 주지 않음) 자동 구분은 과잉 설계로 판단.
   - 검증 상태: 문서 — 별도 검증 불필요.
   - 관련 파일: `Assets/MCPTools/README.md`
-- [ ] **[D18] 브리지 제어 버튼 동시 잠김** — **2026-07-25 실사용 중 발견, 미착수**
-  - 증상: Unity 재시작 후 브리지만 살아 있으면 [서버 시작](브리지 살아있음)·[서버 종료](SessionState PID 없음)가 **동시에 비활성**되어 창에서 손쓸 수 없다. 작업 관리자로 프로세스를 직접 죽여야 함. `showBridgeConsole=false`(기본)면 `Stop()`의 "콘솔 창에서 종료해주세요" 안내도 따를 수 없다.
-  - 대응 방안: 브리지에 `POST /shutdown` 추가 → 누가 띄웠든 HTTP로 종료. [서버 종료] 활성 조건을 `IsLaunchedProcessAlive() || _bridgeAlive`로 확대하고, 이 세션이 띄운 게 아니면 `/health`의 `scriptPath`를 보여주고 확인받는다(D7과 함께 해결). `--host`로 로컬 외 바인딩한 경우(D11)는 `/shutdown` 거부.
-  - 관련 파일: `Editor/ComfyUIGenerator/ComfyUIGeneratorWindow.cs`(232, 240), `Editor/ComfyUIGenerator/ComfyUIServerLauncher.cs`(`Stop()`), `Server~/bridge_server.py`
+- [x] **[D18] 브리지 제어 버튼 동시 잠김** — **2026-07-25 실사용 중 발견 → 같은 날 수정**
+  - 증상: Unity 재시작 후 또는 **다른 Unity 프로젝트**에서 브리지만 살아 있으면 [서버 시작](브리지 살아있음)·[서버 종료](SessionState PID 없음)가 **동시에 비활성**되어 창에서 손쓸 수 없다. 작업 관리자로 프로세스를 직접 죽여야 함. `showBridgeConsole=false`(기본)면 `Stop()`의 "콘솔 창에서 종료해주세요" 안내도 따를 수 없다. UPM 설치 검증(§5.5) 중 새 빈 프로젝트에서 재현되어 U1 항목 진행이 막혔다.
+  - 구현 결과:
+    - 브리지에 `POST /shutdown` 신설 — 응답을 먼저 보내고 별도 스레드에서 `server.shutdown()`(serve_forever 스레드에서 호출하면 교착). `--host`로 **로컬 외 바인딩한 경우 403으로 거부**(D11 연계). `BRIDGE_VERSION` 0.1.0 → 0.2.0.
+    - [서버 종료]의 활성 조건은 **그대로 두고**(이 세션이 띄운 프로세스 트리 종료라는 의미를 유지) 별도 **[원격 종료]** 버튼을 신설 — 브리지가 살아 있는데 이 세션 것이 아닐 때만 노출. `/health`의 `scriptPath`를 확인 다이얼로그에 표시해 어느 설치본을 내리는지 알린다(D7 연계). 구버전 브리지(404)는 "콘솔 창을 닫아주세요" 안내로 분기.
+    - 두 버튼이 동시에 비활성인 상태에 **원인·조치 HelpBox**를 추가 — 원격 종료 / 포트 변경 안내와 함께 "그 상태로도 생성은 정상 동작한다"를 명시.
+  - 검증 상태: **브리지 실측 통과** — 8190/8191에서 `/shutdown` 200 후 서버 실제 종료 확인, `--host 0.0.0.0` 기동 시 403 거부 + 서버 생존 확인, 구버전(8189 기동본) `/shutdown` 404 확인(C# 폴백 분기 조건과 일치). `py_compile` 통과. **Unity 컴파일·UI 동작 확인 필요.**
+  - 관련 파일: `Server~/bridge_server.py`(`handle_shutdown`, `BIND_HOST`), `Editor/ComfyUIGenerator/BridgeClient.cs`(`ShutdownAsync`, `BridgeHealth.scriptPath`), `Editor/ComfyUIGenerator/ComfyUIGeneratorWindow.cs`(`DrawServerSection`, `ShutdownForeignServerAsync`)
 - [ ] **[D10] macOS/Linux 경로 정리** — **보류 (장비 필요)**
   - 판단: 유닉스에서 `showBridgeConsole`(`UseShellExecute=true`)이 실제로 어떻게 동작하는지, `python3` 후보의 실행 권한이 문제되는지는 **실기 없이 정적으로 단정할 수 없다.** 추측으로 분기를 넣으면 검증되지 않은 코드가 늘어날 뿐이므로, macOS/Linux 에디터 확보 후 §5.4 테스트를 거쳐 결정한다.
   - 현재 상태: 종료 경로는 이미 `UNITY_EDITOR_WIN` 분기가 있어(`taskkill` ↔ `Process.Kill`) 최소한 프로세스 정리는 양쪽 모두 동작할 것으로 보인다. **Windows 배포에는 영향 없음.**
@@ -252,6 +256,9 @@
 - [ ] Python이 설치되지 않은 PC에서 [서버 시작] → 5단계 설치 안내 다이얼로그 표시 (**선행 조치 회귀 확인**)
 - [ ] 설정 창의 [Python 자동 탐지]가 경로와 버전을 찾아 채움 (**선행 조치 회귀 확인**)
 - [ ] 후보 생성이 600초를 넘는 저사양 조건에서 타임아웃 값을 늘려 성공 (D8)
+- [ ] 브리지가 실행 중인 상태로 **다른 Unity 프로젝트**의 3단계 창을 열면 [서버 시작]·[서버 종료]가 비활성이면서 **원인 안내 HelpBox + [원격 종료] 버튼**이 보임 (D18)
+- [ ] [원격 종료] → 확인 다이얼로그에 **대상 서버의 `bridge_server.py` 절대 경로**가 표시되고, 종료 후 상태 점이 "미기동"으로 바뀌며 [서버 시작]이 다시 활성화됨 (D18)
+- [ ] Unity를 재시작해 SessionState PID를 잃은 뒤에도 [원격 종료]로 자기 프로젝트가 띄운 브리지를 내릴 수 있음 (D18)
 
 ### 5.4 경로 / 플랫폼
 
@@ -264,9 +271,12 @@
 > §4의 U1~U6는 구현 완료. 태그를 붙인 커밋(`v0.1.0`)을 `github.com/chomul/MCPTools`에 푸시한 뒤 진행한다.
 > 설치 URL: `https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.1.0`
 
-- [ ] 빈 Unity 6 프로젝트에서 `Window > Package Manager > Add package from git URL`에 `https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.1.0` 입력 → **컴파일 오류 0**, `Tools/MCP/*` 메뉴 8개 노출 (U4)
-- [ ] `Tools/MCP/Settings`를 열면 설정 에셋이 **`Assets/` 아래에** 생성되고, 값을 바꿔 저장한 뒤 에디터를 재시작해도 유지됨. **패키지 폴더에는 아무 파일도 생기지 않음** (U2/U3)
+- [x] 빈 Unity 6 프로젝트에서 `Window > Package Manager > Add package from git URL`에 `https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.1.0` 입력 → **컴파일 오류 0**, `Tools/MCP/*` 메뉴 8개 노출 (U4)
+  - 2026-07-25 통과. uGUI·2D Sprite·unity-mcp가 없는 빈 프로젝트에서도 컴파일 오류 0 — §5.1의 선택 의존 항목도 함께 검증됨.
+- [x] `Tools/MCP/Settings`를 열면 설정 에셋이 **`Assets/` 아래에** 생성되고, 값을 바꿔 저장한 뒤 에디터를 재시작해도 유지됨. **패키지 폴더에는 아무 파일도 생기지 않음** (U2/U3)
+  - 2026-07-25 통과.
 - [ ] 3단계 창에서 [서버 시작] → 브리지가 **PackageCache 안의 `Server~/bridge_server.py`** 로 정상 기동 (U1). 실패 시 오류 메시지에 **해석된 절대 경로**가 표시되는지 확인
+  - 2026-07-25 **미검증** — 아래 D18로 막혀 진행하지 못함. D18 수정본으로 재시도 필요.
 - [ ] 패키지를 `Packages/<name>/`으로 **embed**한 상태에서 위 두 항목을 재확인 (설치 형태 2종 모두 동작) (U1)
 - [ ] Package Manager에서 패키지를 **제거 후 재설치**(재해결) → 사용자 설정·사용자 템플릿·프로젝트 쪽 워크플로 사본이 **전부 살아 있음** (U2/U6)
 - [ ] 기존 `Assets/MCPTools/` zip 설치본이 있는 프로젝트에 패키지를 추가 → **중복 설치 경고**가 뜨고, 안내대로 구 폴더를 지우면 컴파일 오류 0 (U5) — 경고가 없으면 `Assembly with name 'MCPTools.Editor' already exists` 오류가 나는지 확인
@@ -277,3 +287,32 @@
 - [ ] `__pycache__`가 패키지 폴더(embed 설치 기준)에 **생성되지 않음** (U10)
 - [ ] 태그 `v0.1.0`·`v0.1.1`을 각각 설치 → Package Manager UI에 **버전이 정확히 표시**되고 전환이 동작 (U8)
 - [ ] 패키지 상세 화면에 **문서 링크가 노출**되고 클릭 시 사용법에 도달 (U14)
+
+## 6. 추가 요청 (2026-07-25, UPM 검증 중 발생)
+
+- [x] **에디터 종료 시 브리지 자동 정리** — D18의 재발 방지책. 브리지를 띄운 채 Unity를 끄면 다음 실행/다른 프로젝트에서 포트만 잡힌 통제 불능 상태가 되므로, 종료 시점에 정리한다.
+  - 구현 결과: `ComfyUIServerLauncher`의 기존 `[InitializeOnLoadMethod]`에서 `EditorApplication.quitting`을 구독(중복 구독 방지를 위해 `-=` 후 `+=`)하고, `OnEditorQuitting`이 **이 세션이 시작한 PID가 살아 있을 때만** `Stop()`을 호출한다. 외부 실행 서버·다른 프로젝트 서버는 PID를 모르므로 건드리지 않는다. 설정 `shutdownBridgeOnEditorQuit`(기본 true)로 끌 수 있고 `Tools/MCP/Settings`에 [종료 시 브리지 정리] 토글로 노출. 설정 로드 실패 시에도 종료 흐름을 막지 않고 기본 동작(정리)을 따른다.
+  - 클래스 단위 `[InitializeOnLoad]` + 정적 생성자를 새로 두지 않고 **기존 `[InitializeOnLoadMethod]`에 합쳤다** (진입점 중복 방지).
+  - 관련 파일: `Editor/ComfyUIGenerator/ComfyUIServerLauncher.cs`, `Editor/Common/MCPToolSettings.cs`, `Editor/Common/MCPSettingsWindow.cs`
+- [x] **단계별 산출물 하위 폴더 분리** — `Assets/Docs`에 기획서와 3종 생성 JSON이 평평하게 쌓여(SpriteSheetPrompt만 17개) 단계 구분이 되지 않던 문제.
+  - 확정 구조: `Docs/1_AssetList` · `Docs/2_PromptSet` · `Docs/SpriteSheetPrompt`, `Generated/3_Candidates/{항목id}` · `Generated/3_Confirmed/{Images,Audio,SpriteSheets,GenerationResults.json}`. 기획서 `.md`/`.txt`는 Docs 루트 유지.
+  - 스프라이트 시트: `Docs/SpriteSheetPrompt/`에는 **프롬프트 JSON**(`answers`+`prompt`, 이미지 아님)이, 슬라이스한 **시트 PNG**는 `3_Confirmed/SpriteSheets/`에 저장된다. 시트는 4단계 적용 대상이 아니라 슬라이스 입력이므로 항목별 확정본(`Images/`)과 분리했다.
+  - 경로 결정을 `MCPToolFolders`로 일원화(폴더명 상수 + `AssetListDir`/`PromptSetDir`/`SpriteSheetDir`/`CandidatesRoot`/`ConfirmedRoot` + `FindDocuments`/`ResolveForRead`). 각 창·도구가 직접 문자열을 조립하던 곳을 전부 이 헬퍼로 교체.
+  - **하위 호환(파일 이동 없음)**: 읽기는 `FindDocuments`가 새 하위 폴더와 구 위치(루트)를 함께 훑고 파일명이 겹치면 새 위치를 채택. 확정본 규칙 경로도 `3_Confirmed` → 구 위치 순으로 탐색. 후보 폴더는 새 위치에 없고 구 위치에만 있으면 구 위치를 반환. `GenerationResults.json`은 새 위치에 없으면 구 위치 내용을 이어받아 새 위치에 저장. 쓰기는 항상 새 위치.
+  - `EnsureWorkFolders`가 단계별 하위 폴더까지 생성. `SpriteSheetPromptBuilder`도 새 폴더 첫 생성 시 `ImportAsset` 대신 `Refresh`하도록 보강(D13과 같은 이유).
+  - 관련 파일: `Editor/Common/MCPToolFolders.cs`, `AssetListup/AssetListBuilder.cs`, `PromptBuilder/PromptBuilder.cs`, `SpriteSheet/SpriteSheetPromptBuilder.cs`, `SpriteSheet/SpriteSheetImporter.cs`, `ComfyUIGenerator/CandidateGenerator.cs`, `AssetApplier/AssetApplier.cs`, 각 창 4종, `Pipeline/PipelineWindow.cs`, `Pipeline/PipelineTool.cs`, MCP 도구 설명(`McpForUnityAdapter.cs` 외)
+- 검증 상태: 정적 검증(괄호/중괄호 델타가 HEAD와 동일, 헬퍼 심볼 존재, 잔여 하드코딩 경로 0건). **Unity 컴파일·동작 확인 필요.**
+
+### 에디터 테스트 (추가 요청분)
+
+- [ ] 브리지 [서버 시작] 후 Unity를 정상 종료 → 작업 관리자/`netstat`에서 python 브리지 프로세스가 사라짐. 다시 Unity를 켜면 [서버 시작]이 활성 상태
+- [ ] `Tools/MCP/Settings`에서 [종료 시 브리지 정리]를 끄고 Unity 종료 → 브리지가 계속 살아 있음 (D18 안내 + [원격 종료]로 정리 가능)
+- [ ] 다른 프로젝트가 띄운 브리지가 있는 상태로 Unity를 종료 → 그 브리지는 종료되지 않음 (내 세션 PID만 정리)
+- [ ] 1단계 [저장] → `Assets/Docs/1_AssetList/`에 생성됨. 2단계 → `2_PromptSet/`, 스프라이트 시트 프롬프트 → `SpriteSheetPrompt/`
+- [ ] 3단계 생성 → `Assets/Generated/3_Candidates/{항목id}/`, [확정] → `3_Confirmed/Images`(오디오는 `Audio`) + `3_Confirmed/GenerationResults.json`
+- [ ] 스프라이트 시트 임포트 → 시트 PNG가 `3_Confirmed/SpriteSheets/{name}_sheet.png`에 저장되고 슬라이스(`walk_01`~)가 정상 적용됨. `Images/`에는 생기지 않음
+- [ ] **구 위치 호환**: `Assets/Docs` 루트에 남아 있는 기존 `AssetList_*.json`/`PromptSet_*.json`이 1·2·4단계 드롭다운에 **그대로 보임**. 구 위치 파일을 불러와 [저장]하면 덮어쓰기가 동작
+- [ ] **구 위치 확정본 호환**: 기존 `Assets/Generated/Images/{id}.png`만 있는 항목이 4단계에서 "확정본 없음"으로 뜨지 않고 정상 적용됨
+- [ ] 기존 `Assets/Generated/GenerationResults.json`이 있는 상태에서 새로 [확정] → `3_Confirmed/GenerationResults.json`에 **기존 기록이 함께** 들어가고 이전 확정 항목의 배지가 유지됨
+- [ ] `Assets/Generated/Sprite/`(사용자가 만든 .anim/.controller)는 도구가 건드리지 않고 그대로 남음
+- [ ] `mcptools_status` 호출 → `assetListCount`/`promptSetCount`/`imageCount`/`candidateFolderCount`가 구·신 위치를 합산한 값으로 나옴

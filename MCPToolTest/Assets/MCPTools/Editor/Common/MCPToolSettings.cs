@@ -102,6 +102,14 @@ namespace MCPTools.Editor
         public bool showBridgeConsole = false;
 
         /// <summary>
+        /// Unity 에디터를 종료할 때 이 도구로 시작한 브리지 서버 프로세스를 함께 종료할지 여부입니다.
+        /// 끄면 브리지가 남아 다음 에디터 실행에서 그대로 재사용됩니다(대신 다른 프로젝트와 포트가 겹칠 수 있음).
+        /// </summary>
+        [Tooltip("Unity를 종료할 때 이 도구로 시작한 브리지 서버도 함께 종료합니다. " +
+                 "끄면 브리지가 계속 실행된 채 남습니다.")]
+        public bool shutdownBridgeOnEditorQuit = true;
+
+        /// <summary>
         /// 생성(단건/일괄) 완료 후 브리지 /free 로 ComfyUI 모델을 언로드해 메모리를 확보할지 여부입니다.
         /// </summary>
         [Tooltip("생성 완료 후 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
@@ -20,6 +21,12 @@ namespace MCPTools.Editor
 
         /// <summary>ComfyUI 서버 생존 여부 (브리지가 /system_stats로 확인).</summary>
         public bool comfyAlive;
+
+        /// <summary>
+        /// 지금 이 포트에 떠 있는 브리지의 <c>bridge_server.py</c> 절대 경로입니다.
+        /// 다른 프로젝트가 띄운 서버를 종료하기 전에 "어느 서버인지" 보여주는 데 씁니다.
+        /// </summary>
+        public string scriptPath = string.Empty;
     }
 
     /// <summary>변수 표시 조건 1건입니다 (다른 bool 변수의 현재 값과 비교, AND 결합).</summary>
@@ -235,12 +242,47 @@ namespace MCPTools.Editor
                 {
                     ok = GetBool(dict, "ok"),
                     comfyUrl = GetString(dict, "comfyUrl"),
-                    comfyAlive = GetBool(dict, "comfyAlive")
+                    comfyAlive = GetBool(dict, "comfyAlive"),
+                    scriptPath = GetString(dict, "scriptPath")
                 };
             }
             catch (Exception) when (!ct.IsCancellationRequested)
             {
                 return new BridgeHealth { ok = false };
+            }
+        }
+
+        /// <summary>
+        /// POST /shutdown 으로 브리지 서버가 스스로 종료하도록 요청합니다.
+        /// 다른 Unity 프로젝트나 이전 에디터 세션이 시작해 PID를 모르는 서버를 끄기 위한 경로입니다.
+        /// </summary>
+        /// <param name="ct">취소 토큰.</param>
+        /// <returns>
+        /// 종료 요청이 받아들여지면 true. 서버가 <c>/shutdown</c>을 모르는 구버전(HTTP 404)이면 false.
+        /// </returns>
+        /// <exception cref="InvalidOperationException">연결 실패 등 그 외 오류 시.</exception>
+        public async Task<bool> ShutdownAsync(CancellationToken ct = default)
+        {
+            try
+            {
+                using (var timeoutCts = CreateTimeoutCts(ct, 10))
+                using (var content = new StringContent("{}", Encoding.UTF8, "application/json"))
+                using (var response = await _http.PostAsync("/shutdown", content, timeoutCts.Token).ConfigureAwait(false))
+                {
+                    // 구버전 브리지는 이 경로를 모르고 404를 준다. 이 경우만 false로 구분해
+                    // 호출부가 "콘솔 창을 닫아주세요" 안내로 넘어갈 수 있게 한다.
+                    if (response.StatusCode == HttpStatusCode.NotFound)
+                    {
+                        return false;
+                    }
+
+                    await ParseResponseAsync(response).ConfigureAwait(false);
+                    return true;
+                }
+            }
+            catch (HttpRequestException e)
+            {
+                throw new InvalidOperationException(BuildConnectionErrorMessage(), e);
             }
         }
 

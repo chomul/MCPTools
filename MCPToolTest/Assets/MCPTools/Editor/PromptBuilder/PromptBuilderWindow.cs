@@ -125,7 +125,7 @@ namespace MCPTools.Editor
                     if (_assetListPaths.Length == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            $"{_settings.docsRootPath} 폴더에 AssetList_*.json이 없습니다. " +
+                            $"{MCPToolFolders.AssetListDir(_settings)} 폴더에 AssetList_*.json이 없습니다. " +
                             "1단계(Tools/MCP/1. Asset Listup)에서 목록을 먼저 저장해주세요.", MessageType.Warning);
                     }
                     else
@@ -489,18 +489,9 @@ namespace MCPTools.Editor
 
         private void RefreshAssetListPaths()
         {
-            string docsRoot = _settings != null ? _settings.docsRootPath : "Assets/Docs";
-            if (!Directory.Exists(docsRoot))
-            {
-                _assetListPaths = new string[0];
-                return;
-            }
-
-            // 최신 파일이 앞에 오도록 정렬해 기본 선택이 가장 최근 목록이 되게 한다.
-            _assetListPaths = Directory.GetFiles(docsRoot, "AssetList_*.json", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(File.GetLastWriteTime)
-                .Select(p => p.Replace('\\', '/'))
-                .ToArray();
+            // 새 하위 폴더(1_AssetList)와 구 위치(Docs 루트)를 함께 훑는다. 최신 파일이 앞에 온다.
+            _assetListPaths = MCPToolFolders.FindDocuments(
+                MCPToolFolders.DocsRoot(_settings), MCPToolFolders.AssetListFolder, "AssetList_*.json");
         }
 
         private void RefreshTemplateList()
@@ -543,7 +534,7 @@ namespace MCPTools.Editor
             if (string.IsNullOrEmpty(listPath))
             {
                 EditorUtility.DisplayDialog("프롬프트 빌더",
-                    $"에셋 목록 JSON이 없습니다.\n{_settings.docsRootPath} 폴더에 1단계 산출물(AssetList_*.json)을 먼저 저장해주세요.",
+                    $"에셋 목록 JSON이 없습니다.\n{MCPToolFolders.AssetListDir(_settings)} 폴더에 1단계 산출물(AssetList_*.json)을 먼저 저장해주세요.",
                     "확인");
                 return null;
             }

@@ -160,3 +160,20 @@
 - [ ] "브리지 콘솔 창 표시"를 켠 상태에서도 시작/조기 종료 감지가 동일하게 동작함
 - [ ] 두 번째 [서버 시작]부터는 탐지가 즉시 끝남(SessionState 캐시), 설정의 Python 실행 파일을 바꾸면 다시 탐지함
 - [ ] Windows 스토어 별칭만 있는 환경(설정 > 앱 실행 별칭 켬, 실제 Python 미설치)에서 [서버 시작] → 스토어 창이 뜨지 않고 안내 다이얼로그가 표시됨
+
+## 후보 개수 창에서 직접 조절 (2026-07-25 요청)
+
+- [x] 3단계 생성 창의 [생성] 버튼 바로 위에 **후보 개수 슬라이더**(`IntSlider`, 1~12, 기본 4) 추가.
+  - 값은 새 필드를 만들지 않고 기존 `MCPToolSettings.candidateCount`에 저장한다 — `Tools/MCP/Settings`의 "후보 개수", `CandidateGenerator`, 전체 생성, MCP 도구(`PipelineTool`의 `config.candidateCount`)가 이미 같은 값을 쓰므로 경로 전체가 자동으로 따라간다.
+  - `Undo.RecordObject` + `EditorUtility.SetDirty`로 기존 "생성 완료 후 모델 언로드" 토글과 동일하게 처리.
+  - 버튼 라벨은 이미 `후보 {N}개 생성` / `재생성 (새 시드로 {N}개)`로 동적이었으므로 라벨 로직 변경 없음.
+  - 상한 12는 ComfyUI 큐가 한 번에 처리하기 현실적인 수준으로 잡은 값(`MaxCandidateCount` 상수).
+  - 관련 파일: `Editor/ComfyUIGenerator/ComfyUIGeneratorWindow.cs`, `Assets/MCPTools/README.md`(3단계 §3)
+- 검증 상태: 정적 검증. **Unity 컴파일·동작 확인 필요.**
+
+### 에디터 테스트 (후보 개수)
+
+- [ ] 슬라이더를 6으로 바꾸면 버튼 라벨이 [후보 6개 생성]으로 즉시 바뀌고, 생성 결과가 실제로 6개 나옴(시드 `seed..seed+5`)
+- [ ] 바꾼 값이 `Tools/MCP/Settings`의 "후보 개수"에도 반영되고, 창을 닫았다 열거나 에디터를 재시작해도 유지됨
+- [ ] [전체 생성 (미생성만)]도 같은 개수로 생성됨
+- [ ] 1로 내렸을 때 정상 동작하고, 슬라이더가 0 이하로 내려가지 않음

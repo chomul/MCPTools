@@ -54,17 +54,18 @@ namespace MCPTools.Editor
             _confirmedCount = CandidateGenerator.GetConfirmedOutputPaths(_settings).Count;
         }
 
-        /// <summary>docsRootPath에서 접두사로 시작하는 최신(파일명 기준 내림차순) JSON 경로를 반환합니다.</summary>
+        /// <summary>
+        /// 단계별 하위 폴더와 구 위치(Docs 루트)를 함께 훑어, 접두사로 시작하는
+        /// 최신(파일명 기준 내림차순) JSON 경로를 반환합니다.
+        /// </summary>
         private string FindLatest(string prefix)
         {
-            string docs = _settings.docsRootPath.TrimEnd('/');
-            if (!Directory.Exists(docs))
-            {
-                return null;
-            }
+            string subfolder = prefix == "AssetList_"
+                ? MCPToolFolders.AssetListFolder
+                : MCPToolFolders.PromptSetFolder;
 
-            return Directory.GetFiles(docs, prefix + "*.json")
-                .Select(p => p.Replace('\\', '/'))
+            return MCPToolFolders
+                .FindDocuments(MCPToolFolders.DocsRoot(_settings), subfolder, prefix + "*.json")
                 .OrderByDescending(p => p, System.StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();
         }

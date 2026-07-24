@@ -95,8 +95,32 @@
 
 - `Tools/MCP/*` 메뉴를 처음 사용하면 설정 에셋이 **`Assets/MCPTools.User/MCPToolSettings.asset`** 에 자동 생성됩니다. 패키지 폴더(`Packages/...`)는 읽기 전용이라 그 안에는 에셋을 만들 수 없기 때문입니다.
   - 설정 조회는 **`Assets` 범위만** 검색하므로, 기존에 `Assets/MCPTools/Editor/Common/MCPToolSettings.asset`을 쓰던 프로젝트는 **그 에셋을 계속 사용**합니다(새로 만들어지지 않음). `Assets` 아래에 설정 에셋이 2개 이상이면 첫 번째를 사용하고 콘솔에 중복 경로를 경고로 남깁니다.
-- 각 단계 창을 열면 `Assets/Docs`·`Assets/Generated` 폴더가 없을 때 자동 생성되고 콘솔에 안내가 1회 출력됩니다. **기획서 파일은 사용자가 `Assets/Docs`에 직접 넣어야 합니다.**
+- 각 단계 창을 열면 `Assets/Docs`·`Assets/Generated`와 그 아래 단계별 하위 폴더가 없을 때 자동 생성되고 콘솔에 안내가 1회 출력됩니다. **기획서 파일은 사용자가 `Assets/Docs`에 직접 넣어야 합니다.**
 - (선택) MCP 도구를 쓰려면 unity-mcp 패키지를 설치하고 MCP 클라이언트를 연결합니다. `Tools/MCP/Ping (Local Test)` 메뉴 또는 `mcptools_ping` 호출로 연결을 확인할 수 있습니다.
+
+#### 산출물 폴더 구조
+
+단계별 산출물은 아래 하위 폴더로 나뉩니다. 기획서(`.md`/`.txt`)만 `Assets/Docs` 루트에 둡니다.
+
+```
+Assets/Docs/
+├── (기획서 .md/.txt)          ← 사용자가 직접 넣는 입력
+├── 1_AssetList/               AssetList_{yyyyMMdd_HHmm}.json      (1단계)
+├── 2_PromptSet/               PromptSet_{yyyyMMdd_HHmm}.json      (2단계)
+└── SpriteSheetPrompt/         SpriteSheetPrompt_{...}.json        (시트 프롬프트 문서)
+
+Assets/Generated/
+├── 3_Candidates/{항목id}/     {시드}.png + {시드}.json            (3단계 후보)
+└── 3_Confirmed/
+    ├── Images/                {항목id}.png                        (3단계 확정본)
+    ├── Audio/                 {항목id}.flac|wav|mp3|ogg
+    ├── SpriteSheets/          {name}_sheet.png                    (슬라이스한 시트 이미지)
+    └── GenerationResults.json 확정 기록
+```
+
+`Docs/SpriteSheetPrompt/`에는 **이미지가 아니라 외부 AI에 넘길 프롬프트 JSON**(`answers` + `prompt`)이 들어갑니다. `PromptSet`과 같은 성격이라 Docs 아래에 둡니다. 실제 **생성된 시트 이미지**는 `Generated/3_Confirmed/SpriteSheets/{name}_sheet.png`로 저장됩니다. 시트는 4단계 적용 대상이 아니라 슬라이스 입력이므로 항목별 확정본(`Images/`)과 분리해 둡니다.
+
+**기존 프로젝트 호환** — 하위 폴더 도입 이전에 루트에 저장된 산출물은 **옮기지 않아도 됩니다.** 목록 드롭다운과 확정본 자동 탐색이 새 하위 폴더와 구 위치를 **함께** 훑습니다(같은 파일명이 양쪽에 있으면 새 위치 우선). 새로 저장하는 파일만 하위 폴더로 들어갑니다. `GenerationResults.json`은 새 위치에 없으면 구 위치의 기록을 이어받아 저장합니다.
 
 ### MCPToolSettings 설정 항목
 
@@ -112,8 +136,9 @@
 | `defaultImageWorkflow` | `GenerateImage` | 이미지 항목 기본 워크플로 이름 |
 | `generatedRootPath` | `Assets/Generated` | 생성 결과물 루트 경로 |
 | `docsRootPath` | `Assets/Docs` | 기획서·목록 문서 루트 경로 |
-| `candidateCount` | 4 | 항목당 후보 생성 개수 |
+| `candidateCount` | 4 | 항목당 후보 생성 개수 (3단계 창의 **후보 개수** 슬라이더 1~12와 같은 값) |
 | `spritePixelsPerUnit` | 100 | 확정 시 Sprite 임포트에 적용할 Pixels Per Unit |
+| `shutdownBridgeOnEditorQuit` | true | Unity 종료 시 이 도구로 시작한 브리지 서버를 함께 종료. 끄면 브리지가 계속 실행된 채 남음 |
 | `unloadModelsAfterBatch` | true | 생성(단건/일괄) 완료 후 브리지 `/free`로 ComfyUI 모델을 언로드해 VRAM/메모리를 확보. 다음 생성 시 모델을 다시 로드하므로 첫 생성이 느려질 수 있음 |
 
 설정 창(`Tools/MCP/Settings`)의 버튼:
@@ -126,7 +151,16 @@
 
 메뉴: **`Tools/MCP/1. Asset Listup`**
 
-창 구성(위에서 아래로): **기획서에서 항목 추측해 추가** 토글 → **AI 연동** 박스 → **로컬 AI 미사용 시 (수동 방식)** Foldout → 항목 표 → 하단 상태 메시지 + [항목 추가]/[저장].
+창 구성(위에서 아래로): **기존 목록 불러오기** 박스 → **기획서에서 항목 추측해 추가** 토글 → **AI 연동** 박스 → **로컬 AI 미사용 시 (수동 방식)** Foldout → 항목 표 → 하단 상태 메시지 + [항목 추가]/[저장].
+
+### 0-1) 기존 목록 불러와 이어서 편집
+
+이미 저장한 목록을 다시 열어 항목을 추가·수정·삭제할 수 있습니다.
+
+- **기존 목록** 드롭다운 — `docsRootPath/1_AssetList`(기본 `Assets/Docs/1_AssetList`)와 구 위치인 Docs 루트의 `AssetList_*.json`을 **최신 파일 순**으로 보여줍니다 ([새로고침]으로 갱신). 저장된 목록이 없으면 안내 문구만 표시됩니다.
+- **[불러오기]** — 선택한 파일을 표에 채웁니다. 편집 중인 목록이 있으면 버릴지 먼저 확인합니다. 이후 표에서 항목 추가([항목 추가])·수정(각 셀 직접 편집)·삭제(행 오른쪽 [삭제])가 가능합니다.
+- **[저장]** — 불러온 파일을 편집 중이면 **덮어쓰기 / 새 파일로 저장 / 취소**를 묻습니다. 그 외에는 종전대로 `AssetList_{yyyyMMdd_HHmm}.json`을 새로 만듭니다. 저장 후에는 방금 저장한 파일이 편집 대상으로 유지되어 계속 덮어쓸 수 있습니다.
+- 스캔이나 AI 생성으로 목록을 **교체**하면 불러온 파일과의 연결이 끊어져, 관계 없는 파일에 덮어쓰기를 제안하지 않습니다(새 파일로 저장됩니다).
 
 ### 0) 항목 소스 토글 — "기획서에서 항목 추측해 추가"
 
@@ -155,13 +189,13 @@ Foldout 안의 3버튼 (AI CLI 미감지 시 자동으로 펼쳐짐):
 ### 3) 편집과 저장
 
 - 항목 표(ID/이름/종류/UI 여부/대상 프리팹/대상 씬/대상 오브젝트/설명/상태/삭제)에서 셀을 직접 편집합니다. 대상(프리팹/씬) 경로가 모두 비어 있거나 UI 여부가 비어 있는 행은 경고색으로 표시됩니다. `targetPrefabPath`와 `targetScenePath`는 상호 배타이며, 씬 항목의 대상 오브젝트 경로는 씬 루트 오브젝트 기준 계층 경로입니다.
-- **[저장]** — 대상 미기록 항목이 있어도 저장이 차단되지 않습니다. "대상 미기록 항목 N건" 확인 다이얼로그에서 [저장]을 선택하면 해당 항목 상태가 **"대상 미정"** 으로 기록된 채 저장되고, [취소] 시 저장하지 않습니다. 저장 경로: `Assets/Docs/AssetList_{yyyyMMdd_HHmm}.json`.
+- **[저장]** — 대상 미기록 항목이 있어도 저장이 차단되지 않습니다. "대상 미기록 항목 N건" 확인 다이얼로그에서 [저장]을 선택하면 해당 항목 상태가 **"대상 미정"** 으로 기록된 채 저장되고, [취소] 시 저장하지 않습니다. 저장 경로: `Assets/Docs/1_AssetList/AssetList_{yyyyMMdd_HHmm}.json`.
 
 ## 2단계 — 프롬프트 제작 (PromptBuilder) 사용법
 
 메뉴: **`Tools/MCP/2. Prompt Builder`**
 
-1단계 산출물(`Assets/Docs/AssetList_*.json`)을 입력으로 받아, 항목별 ComfyUI용 positive/negative 프롬프트를 담은 `PromptSet_{yyyyMMdd_HHmm}.json`을 만듭니다. 창 구성은 1단계와 동일합니다: **AI 연동** 박스 → **로컬 AI 미사용 시 (수동 방식)** Foldout → 프롬프트 표 → 하단 상태 메시지 + [항목 추가]/[저장].
+1단계 산출물(`Assets/Docs/1_AssetList/AssetList_*.json`)을 입력으로 받아, 항목별 ComfyUI용 positive/negative 프롬프트를 담은 `PromptSet_{yyyyMMdd_HHmm}.json`을 만듭니다. 창 구성은 1단계와 동일합니다: **AI 연동** 박스 → **로컬 AI 미사용 시 (수동 방식)** Foldout → 프롬프트 표 → 하단 상태 메시지 + [항목 추가]/[저장].
 
 ### 1) AI 연동 (주 흐름)
 
@@ -178,7 +212,7 @@ Foldout 안의 3버튼 (AI CLI 미감지 시 자동으로 펼쳐짐):
 ### 3) 편집과 저장
 
 - 표(ID/이름/종류/UI/대상 프리팹/Positive/Negative/삭제)에서 셀을 직접 편집합니다. positive가 비어 있는 행은 경고색으로 표시됩니다.
-- **[저장]** — positive가 빈 항목이 있으면 확인 다이얼로그 후 저장합니다. 저장 경로: `Assets/Docs/PromptSet_{yyyyMMdd_HHmm}.json`.
+- **[저장]** — positive가 빈 항목이 있으면 확인 다이얼로그 후 저장합니다. 저장 경로: `Assets/Docs/2_PromptSet/PromptSet_{yyyyMMdd_HHmm}.json`.
 
 ### 프롬프트 템플릿
 
@@ -193,7 +227,7 @@ Foldout 안의 3버튼 (AI CLI 미감지 시 자동으로 펼쳐짐):
 
 메뉴: **`Tools/MCP/3. ComfyUI Generator`**
 
-2단계 산출물(`Assets/Docs/PromptSet_*.json`)을 입력으로 **브리지 서버** 경유로 ComfyUI를 호출해 항목당 후보 4장(시드 변경)을 생성하고, 썸네일에서 선택·확정합니다.
+2단계 산출물(`Assets/Docs/2_PromptSet/PromptSet_*.json`)을 입력으로 **브리지 서버** 경유로 ComfyUI를 호출해 항목당 후보 4장(시드 변경)을 생성하고, 썸네일에서 선택·확정합니다.
 
 ### 브리지 서버 구조
 
@@ -221,7 +255,10 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
   - 탐지 순서: 설정의 `pythonExecutable`(절대 경로면 존재 확인) → `py -3` / `python` / `python3` → Windows 표준 설치 폴더(`%LOCALAPPDATA%\Programs\Python\Python3*`, `%ProgramFiles%\Python3*` 등) → PATH의 각 디렉터리. 각 후보를 실제로 실행해 **Python 3.7 이상**인지 검증하므로 Windows 스토어 앱 실행 별칭 스텁이나 Python 2는 자동으로 걸러집니다. 결과는 세션 단위로 캐시됩니다.
   - Python을 찾지 못하면 설치·PATH·Unity 재시작·스토어 별칭·절대 경로 지정 방법을 담은 안내 다이얼로그가 뜹니다. 시작은 됐지만 서버가 곧바로 죽는 경우(포트 충돌 등)도 종료 코드와 로그 마지막 내용을 포함한 안내가 표시됩니다.
   - **ComfyUI 자체는 별도로 실행해야 합니다.**
-- **[서버 종료]** — 이 도구로 시작한 프로세스 트리를 종료합니다(taskkill /T /F). PID는 SessionState에 저장되어 스크립트 컴파일(도메인 리로드) 후에도 유지됩니다. 외부에서 직접 실행한 서버는 종료할 수 없습니다.
+- **[서버 종료]** — 이 도구로 시작한 프로세스 트리를 종료합니다(taskkill /T /F). PID는 SessionState에 저장되어 스크립트 컴파일(도메인 리로드) 후에도 유지됩니다. SessionState는 에디터를 재시작하면 사라지므로, 그 뒤에는 이 버튼이 비활성화됩니다.
+- Unity 에디터를 종료하면 **이 도구로 시작한 브리지 서버도 함께 종료**됩니다(설정 `shutdownBridgeOnEditorQuit`, 기본 켬). 외부에서 직접 실행한 서버나 다른 프로젝트가 띄운 서버는 건드리지 않습니다. 브리지를 계속 띄워두려면 `Tools/MCP/Settings`의 **[종료 시 브리지 정리]** 를 끄세요.
+- **[원격 종료]** — 이 세션이 시작하지 않은 브리지 서버(다른 Unity 프로젝트가 띄운 서버, 에디터 재시작으로 PID를 잃은 서버)를 `POST /shutdown`으로 내립니다. 서버가 실행 중이지만 이 세션의 것이 아닐 때만 나타납니다. 확인 다이얼로그를 거치며, `/shutdown`이 없는 구버전 브리지면 콘솔 창을 직접 닫으라는 안내가 표시됩니다.
+- 다른 프로젝트가 띄운 서버가 이미 포트를 쓰고 있으면 **[서버 시작]과 [서버 종료]가 동시에 비활성화**됩니다. 이때는 상단에 원인과 조치(원격 종료 / 포트 변경)를 담은 안내가 표시되며, **그 상태로도 생성은 정상 동작합니다.**
 
 ### 2) 워크플로 선택과 변수 편집
 
@@ -244,9 +281,10 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 ### 3) 생성 → 선택 → 확정
 
 1. **PromptSet JSON** 드롭다운(최신 파일 기본)에서 문서를 [로드]하고 **항목**을 선택합니다 (항목 선택 시 프롬프트 변수 자동 채움).
-2. **[후보 4개 생성]** — 제출 전에 **사전 검증(preflight)** 을 수행해 누락된 커스텀 노드와 ComfyUI에 없는 파일/값(모델 파일명 등)이 있으면 원인·조치를 담은 다이얼로그를 띄우고 생성을 중단합니다. 통과하면 무작위 기준 시드부터 `seed..seed+3` 4건을 브리지 서버가 큐잉/폴링합니다(설정 `candidateCount`). 진행률 바가 표시되고 [취소]할 수 있으며 에디터는 멈추지 않습니다. 결과는 `Assets/Generated/Candidates/{항목id}/{시드}.png` + 메타 `{시드}.json`(시드/프롬프트/워크플로/대상 정보)로 저장됩니다.
-3. 썸네일을 클릭해 선택 후 **[확정]** — `Assets/Generated/Images/{항목id}.png`(오디오는 `Audio/`)로 복사되고 `Assets/Generated/GenerationResults.json`에 기록됩니다. **[재생성]** 시 기존 후보를 삭제하고 새 시드로 다시 4장을 생성합니다.
-4. **확정 결과 표시** — 확정된 항목은 목록 행에 소형 썸네일과 `확정됨` 배지가 표시되고, 항목 선택 시 왼쪽 하단에 확정 에셋 미리보기(오디오는 아이콘+파일명)와 경로가 표시됩니다. 썸네일/[에셋 위치 보기 (Ping)] 클릭 시 프로젝트 창에서 해당 에셋을 핑합니다. 확정 상태는 `Assets/Generated/GenerationResults.json` 기록으로 에디터 재시작 후에도 유지되며, 확정 에셋이 삭제된 경우 "확정 에셋 없음(삭제됨)" 안내가 표시됩니다.
+2. **[후보 N개 생성]** — **후보 개수** 슬라이더(1~12, 기본 4)로 한 번에 생성할 개수를 조절합니다. 값은 설정 에셋의 `candidateCount`에 저장되어 `Tools/MCP/Settings`와 공유되며, 전체 생성·MCP 도구 경로에도 같은 값이 적용됩니다. 개수가 많을수록 생성 시간과 VRAM 사용량이 늘어납니다.
+   제출 전에 **사전 검증(preflight)** 을 수행해 누락된 커스텀 노드와 ComfyUI에 없는 파일/값(모델 파일명 등)이 있으면 원인·조치를 담은 다이얼로그를 띄우고 생성을 중단합니다. 통과하면 무작위 기준 시드부터 `seed..seed+3` 4건을 브리지 서버가 큐잉/폴링합니다(설정 `candidateCount`). 진행률 바가 표시되고 [취소]할 수 있으며 에디터는 멈추지 않습니다. 결과는 `Assets/Generated/3_Candidates/{항목id}/{시드}.png` + 메타 `{시드}.json`(시드/프롬프트/워크플로/대상 정보)로 저장됩니다.
+3. 썸네일을 클릭해 선택 후 **[확정]** — `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/`)로 복사되고 `Assets/Generated/3_Confirmed/GenerationResults.json`에 기록됩니다. **[재생성]** 시 기존 후보를 삭제하고 새 시드로 다시 4장을 생성합니다.
+4. **확정 결과 표시** — 확정된 항목은 목록 행에 소형 썸네일과 `확정됨` 배지가 표시되고, 항목 선택 시 왼쪽 하단에 확정 에셋 미리보기(오디오는 아이콘+파일명)와 경로가 표시됩니다. 썸네일/[에셋 위치 보기 (Ping)] 클릭 시 프로젝트 창에서 해당 에셋을 핑합니다. 확정 상태는 `Assets/Generated/3_Confirmed/GenerationResults.json` 기록으로 에디터 재시작 후에도 유지되며, 확정 에셋이 삭제된 경우 "확정 에셋 없음(삭제됨)" 안내가 표시됩니다.
 5. **임포트 자동 설정** — 확정된 이미지는 TextureImporter로 **Sprite(2D and UI)** + `alphaIsTransparency` + PPU(`spritePixelsPerUnit`)가 적용됩니다. 단, 대상 프리팹의 대상 오브젝트가 **RawImage**인 항목만 Texture(Default)를 유지합니다.
 
 항목 종류별 기본 워크플로: 오디오 항목 → `Audio`, UI 항목 → `UI`, 그 외 이미지 → 설정의 `defaultImageWorkflow`(기본 `GenerateImage`).
@@ -265,7 +303,7 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 
 **오디오 임의 필드 적용**: 오디오 항목에 `targetComponent`(컴포넌트 타입 이름, 사용자 MonoBehaviour 포함)와 `targetField`(직렬화 필드 경로)를 함께 지정하면 `AudioSource.clip` 대신 해당 컴포넌트의 직렬화된 AudioClip 필드에 적용합니다 — 예: `[SerializeField] AudioClip jumpSound`를 코드에서 `PlayOneShot`으로 재생하는 경우. 적용 전 컴포넌트 존재, 필드 존재, 필드가 AudioClip을 받는 ObjectReference인지 검증하며, 미리보기의 "현재 값"도 해당 필드 값을 표시합니다. 두 필드가 없으면 기존 `AudioSource.clip` 동작이 그대로 유지됩니다.
 
-확정본 자동 탐색: `Assets/Generated/GenerationResults.json`의 `outputPath` 기록을 우선 사용하고, 없으면 `Assets/Generated/Images/{항목id}.png`(오디오는 `Audio/{항목id}.flac|wav|mp3|ogg`)를 찾습니다.
+확정본 자동 탐색: `Assets/Generated/3_Confirmed/GenerationResults.json`의 `outputPath` 기록을 우선 사용하고, 없으면 `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/{항목id}.flac|wav|mp3|ogg`)를 찾습니다. 하위 폴더 도입 이전 위치(`Assets/Generated/Images` 등)도 함께 탐색합니다.
 
 ## 파이프라인 통합 창 (All-in-One)
 
@@ -309,7 +347,7 @@ AI(MCP 클라이언트)가 목록을 작성할 재료를 반환합니다. 항목
 
 - 파라미터:
   - `items: object[]` (필수) — itemSchema 형식의 항목 객체 배열. 유효 항목이 없으면 오류. `id` 생략 시 `item_001` 형식으로 자동 부여.
-  - `outputPath: string` (선택) — 저장 경로. 생략 시 `Assets/Docs/AssetList_{yyyyMMdd_HHmm}.json`.
+  - `outputPath: string` (선택) — 저장 경로. 생략 시 `Assets/Docs/1_AssetList/AssetList_{yyyyMMdd_HHmm}.json`.
   - `designDocPath: string`, `scanRootPath: string` (선택) — 문서 메타 기록용.
 - 반환 `data`: `{ outputPath, itemCount, warnings }` — `warnings`는 대상 프리팹/UI 여부 미기록 항목 안내 목록. **경고가 있어도 저장은 수행됩니다** (에디터 창에서 후속 보완).
 
@@ -332,7 +370,7 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
 - 파라미터:
   - `items: object[]` (필수) — promptSchema 형식의 항목 객체 배열. 유효 항목이 없으면 오류. `id` 생략 시 자동 부여.
   - `assetListPath: string`, `templateName: string` (선택) — 문서 메타 기록용.
-  - `outputPath: string` (선택) — 저장 경로. 생략 시 `Assets/Docs/PromptSet_{yyyyMMdd_HHmm}.json`.
+  - `outputPath: string` (선택) — 저장 경로. 생략 시 `Assets/Docs/2_PromptSet/PromptSet_{yyyyMMdd_HHmm}.json`.
 - 반환 `data`: `{ outputPath, itemCount, warnings }` — `warnings`는 빈 positive 프롬프트/대상 미기록 항목 안내 목록. **경고가 있어도 저장은 수행됩니다.**
 
 ### `mcptools_generate_candidates` — 3단계 후보 생성 Job 시작
@@ -359,7 +397,7 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
 ### `mcptools_select_candidate` — 후보 확정
 
 - 파라미터: `assetItemId: string` (필수), `candidatePath: string` (필수, list가 반환한 후보 경로)
-- 반환 `data`: `{ selectedPath }` — `Assets/Generated/Images/`(오디오는 `Audio/`)로 복사된 확정본 경로
+- 반환 `data`: `{ selectedPath }` — `Assets/Generated/3_Confirmed/Images/`(오디오는 `Audio/`)로 복사된 확정본 경로
 - 창의 [확정]과 동일한 공용 로직: `GenerationResults.json` 기록 + 이미지 항목 Sprite 임포트 자동 설정(RawImage 대상 제외).
 
 ### `mcptools_apply_asset` — 4단계 단건 적용
@@ -407,7 +445,7 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
 
 ```json
 {
-  "assetListPath": "Assets/Docs/AssetList_20260721_1200.json",
+  "assetListPath": "Assets/Docs/1_AssetList/AssetList_20260721_1200.json",
   "templateName": "default",
   "createdAt": "2026-07-21 13:00",
   "items": [

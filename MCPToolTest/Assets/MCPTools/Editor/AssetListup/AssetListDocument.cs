@@ -143,7 +143,7 @@ namespace MCPTools.Editor
     }
 
     /// <summary>
-    /// 에셋 리스트업 1단계 산출물 문서입니다. `Assets/Docs/AssetList_{yyyyMMdd_HHmm}.json`으로 저장됩니다.
+    /// 에셋 리스트업 1단계 산출물 문서입니다. `Assets/Docs/1_AssetList/AssetList_{yyyyMMdd_HHmm}.json`으로 저장됩니다.
     /// </summary>
     [Serializable]
     public class AssetListDocument

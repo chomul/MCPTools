@@ -24,23 +24,48 @@ namespace MCPTools.Editor
 
     /// <summary>
     /// 3단계 후보 생성 오케스트레이터입니다. 기준 시드에서 seed..seed+N-1 순차 큐잉으로
-    /// 후보 N개(기본 4개)를 생성해 <c>Assets/Generated/Candidates/{assetItemId}/</c>에 저장하고,
-    /// 선택된 후보를 <c>Assets/Generated/Images/</c>(오디오는 Audio/)로 확정 복사합니다.
+    /// 후보 N개(기본 4개)를 생성해 <c>Assets/Generated/3_Candidates/{assetItemId}/</c>에 저장하고,
+    /// 선택된 후보를 <c>Assets/Generated/3_Confirmed/Images/</c>(오디오는 Audio/)로 확정 복사합니다.
     /// </summary>
     public static class CandidateGenerator
     {
-        /// <summary>확정 결과 누적 문서 파일명입니다 (generatedRootPath 바로 아래).</summary>
+        /// <summary>확정 결과 누적 문서 파일명입니다 (확정본 폴더 바로 아래).</summary>
         public const string ResultsFileName = "GenerationResults.json";
+
+        /// <summary>
+        /// 확정 결과 문서를 읽을 경로를 반환합니다. 새 위치(<c>3_Confirmed/</c>)를 우선하고,
+        /// 없으면 하위 폴더 도입 이전 위치(생성 루트 바로 아래)를 사용합니다.
+        /// </summary>
+        /// <param name="settings">설정 객체.</param>
+        /// <returns>읽기에 사용할 경로 (Assets 기준 상대 경로).</returns>
+        internal static string ResolveResultsPathForRead(MCPToolSettings settings)
+        {
+            return MCPToolFolders.ResolveForRead(
+                $"{MCPToolFolders.ConfirmedRoot(settings)}/{ResultsFileName}",
+                $"{MCPToolFolders.GeneratedRoot(settings)}/{ResultsFileName}");
+        }
 
         /// <summary>
         /// 항목의 후보 저장 폴더 경로를 반환합니다 (Assets/ 기준 상대 경로).
         /// </summary>
         /// <param name="settings">설정 객체.</param>
         /// <param name="assetItemId">항목 ID.</param>
-        /// <returns>예: "Assets/Generated/Candidates/item_001".</returns>
+        /// <returns>예: "Assets/Generated/3_Candidates/item_001".</returns>
+        /// <remarks>
+        /// 하위 폴더 도입 이전에 만들어진 후보는 "Generated/Candidates/{id}"에 있다.
+        /// 새 위치에 폴더가 없고 구 위치에만 있으면 구 위치를 돌려줘 기존 후보를 계속 볼 수 있게 한다.
+        /// </remarks>
         public static string GetCandidateFolder(MCPToolSettings settings, string assetItemId)
         {
-            return $"{settings.generatedRootPath.TrimEnd('/')}/Candidates/{SanitizeId(assetItemId)}";
+            string id = SanitizeId(assetItemId);
+            string current = $"{MCPToolFolders.CandidatesRoot(settings)}/{id}";
+            if (Directory.Exists(current))
+            {
+                return current;
+            }
+
+            string legacy = $"{MCPToolFolders.GeneratedRoot(settings)}/{MCPToolFolders.LegacyCandidatesFolder}/{id}";
+            return Directory.Exists(legacy) ? legacy : current;
         }
 
         /// <summary>
@@ -254,7 +279,7 @@ namespace MCPTools.Editor
                 return paths;
             }
 
-            string resultsPath = $"{settings.generatedRootPath.TrimEnd('/')}/{ResultsFileName}";
+            string resultsPath = ResolveResultsPathForRead(settings);
             if (!File.Exists(resultsPath))
             {
                 return paths;
@@ -305,7 +330,7 @@ namespace MCPTools.Editor
 
             string ext = Path.GetExtension(candidatePath).ToLowerInvariant();
             bool isAudio = ext == ".flac" || ext == ".wav" || ext == ".mp3" || ext == ".ogg";
-            string root = settings.generatedRootPath.TrimEnd('/');
+            string root = MCPToolFolders.ConfirmedRoot(settings);
             string destFolder = isAudio ? $"{root}/Audio" : $"{root}/Images";
             Directory.CreateDirectory(destFolder);
 
@@ -555,14 +580,18 @@ namespace MCPTools.Editor
             MCPToolSettings settings, string assetItemId, string candidatePath, string outputPath,
             long seed, Dictionary<string, object> meta)
         {
-            string root = settings.generatedRootPath.TrimEnd('/');
+            string root = MCPToolFolders.ConfirmedRoot(settings);
             Directory.CreateDirectory(root);
             string resultsPath = $"{root}/{ResultsFileName}";
 
+            // 새 위치에 아직 문서가 없으면 구 위치의 내용을 이어받아 기록이 끊기지 않게 한다.
+            // (이후 저장은 새 위치로만 이뤄지고, 읽기도 새 위치를 우선한다.)
+            string readPath = ResolveResultsPathForRead(settings);
+
             var results = new List<object>();
-            if (File.Exists(resultsPath))
+            if (File.Exists(readPath))
             {
-                var doc = MiniJson.Deserialize(File.ReadAllText(resultsPath)) as Dictionary<string, object>;
+                var doc = MiniJson.Deserialize(File.ReadAllText(readPath)) as Dictionary<string, object>;
                 if (doc != null && doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
                 {
                     foreach (object entry in list)

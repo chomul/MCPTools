@@ -32,7 +32,7 @@ namespace MCPTools.Editor
                 "외부 AI가 생성한 멀티 행 스프라이트 시트 png를 격자선 기준으로 슬라이스합니다. 배경 모드가 white면 " +
                 "외곽 시드 BFS(그라데이션 허용 오차 + 근사 흰색 + 무채색 조건 — 유채색 글로우 이펙트 보존)로 " +
                 "배경을 투명화한 뒤, 시트에 그려진 격자선을 직접 검출해 균일 셀 경계를 만들고 재조립 없이 원본 셀 " +
-                "위치 그대로 Assets/Generated/Images/{name}_sheet.png로 저장하고 행 동작명 기반(walk_01~) " +
+                "위치 그대로 Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png로 저장하고 행 동작명 기반(walk_01~) " +
                 "Sprite Mode=Multiple 슬라이스를 적용합니다. 격자선이 곧 정답이므로 행/프레임 수가 rows와 달라도 " +
                 "검출된 격자 그대로 임포트합니다(행 이름은 순서대로 rows의 동작명, 초과 행은 rowN 자동 이름). " +
                 "파라미터: imagePath(필수, 절대 경로 또는 Assets/ 상대 경로 png), " +

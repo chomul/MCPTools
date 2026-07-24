@@ -87,7 +87,7 @@ namespace MCPTools.Editor
     }
 
     /// <summary>
-    /// 2단계 프롬프트 제작 산출물 문서입니다. `Assets/Docs/PromptSet_{yyyyMMdd_HHmm}.json`으로 저장됩니다.
+    /// 2단계 프롬프트 제작 산출물 문서입니다. `Assets/Docs/2_PromptSet/PromptSet_{yyyyMMdd_HHmm}.json`으로 저장됩니다.
     /// </summary>
     [Serializable]
     public class PromptSetDocument

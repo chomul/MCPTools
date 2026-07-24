@@ -43,7 +43,7 @@ namespace MCPTools.Editor
             McpToolRegistry.Register(
                 "mcptools_status",
                 "MCP Tools 진단: 설정값(ComfyUI/브리지 주소, 경로, 후보 개수), 산출물 현황(AssetList/PromptSet 개수·최신 파일, " +
-                "Generated/Images·Audio·Candidates 개수, 확정 항목 수), 버전·Unity 버전을 반환합니다. " +
+                "3_Confirmed/Images·Audio 및 3_Candidates 개수, 확정 항목 수), 버전·Unity 버전을 반환합니다. " +
                 "서버 실시간 연결 확인은 하지 않습니다(동기 블로킹 방지) — 3단계 창 또는 브리지 /health를 참조하세요. " +
                 "파라미터: 없음.",
                 ExecuteStatus);
@@ -257,18 +257,25 @@ namespace MCPTools.Editor
         {
             var settings = MCPToolSettings.GetOrCreate();
 
-            string docs = settings.docsRootPath.TrimEnd('/');
-            string root = settings.generatedRootPath.TrimEnd('/');
+            string docs = MCPToolFolders.DocsRoot(settings);
+            string root = MCPToolFolders.GeneratedRoot(settings);
+            string confirmed = MCPToolFolders.ConfirmedRoot(settings);
+
+            // 단계별 하위 폴더 도입 이전 위치의 산출물도 함께 센다.
+            string[] assetLists = MCPToolFolders.FindDocuments(docs, MCPToolFolders.AssetListFolder, "AssetList_*.json");
+            string[] promptSets = MCPToolFolders.FindDocuments(docs, MCPToolFolders.PromptSetFolder, "PromptSet_*.json");
 
             var outputs = new Dictionary<string, object>
             {
-                { "assetListCount", CountFiles(docs, "AssetList_*.json") },
-                { "latestAssetList", LatestFile(docs, "AssetList_") },
-                { "promptSetCount", CountFiles(docs, "PromptSet_*.json") },
-                { "latestPromptSet", LatestFile(docs, "PromptSet_") },
-                { "imageCount", CountAssetFiles($"{root}/Images") },
-                { "audioCount", CountAssetFiles($"{root}/Audio") },
-                { "candidateFolderCount", CountSubfolders($"{root}/Candidates") },
+                { "assetListCount", assetLists.Length },
+                { "latestAssetList", LatestFileName(assetLists) },
+                { "promptSetCount", promptSets.Length },
+                { "latestPromptSet", LatestFileName(promptSets) },
+                { "imageCount", CountAssetFiles($"{confirmed}/Images") + CountAssetFiles($"{root}/Images") },
+                { "audioCount", CountAssetFiles($"{confirmed}/Audio") + CountAssetFiles($"{root}/Audio") },
+                { "candidateFolderCount",
+                    CountSubfolders($"{root}/{MCPToolFolders.CandidatesFolder}") +
+                    CountSubfolders($"{root}/{MCPToolFolders.LegacyCandidatesFolder}") },
                 { "confirmedCount", CandidateGenerator.GetConfirmedOutputPaths(settings).Count }
             };
 
@@ -296,11 +303,6 @@ namespace MCPTools.Editor
 
         // ─────────────────────────── 헬퍼 ───────────────────────────
 
-        private static int CountFiles(string folder, string searchPattern)
-        {
-            return Directory.Exists(folder) ? Directory.GetFiles(folder, searchPattern).Length : 0;
-        }
-
         /// <summary>이미지/오디오 폴더의 에셋 파일 수를 셉니다(.meta 제외).</summary>
         private static int CountAssetFiles(string folder)
         {
@@ -318,15 +320,10 @@ namespace MCPTools.Editor
             return Directory.Exists(folder) ? Directory.GetDirectories(folder).Length : 0;
         }
 
-        /// <summary>접두사로 시작하는 최신(파일명 내림차순) 파일명을 반환합니다(경로 제외). 없으면 빈 문자열.</summary>
-        private static string LatestFile(string folder, string prefix)
+        /// <summary>경로 목록에서 가장 최신(파일명 내림차순) 파일명을 반환합니다(경로 제외). 없으면 빈 문자열.</summary>
+        private static string LatestFileName(string[] paths)
         {
-            if (!Directory.Exists(folder))
-            {
-                return string.Empty;
-            }
-
-            string latest = Directory.GetFiles(folder, prefix + "*.json")
+            string latest = paths
                 .Select(Path.GetFileName)
                 .OrderByDescending(n => n, StringComparer.OrdinalIgnoreCase)
                 .FirstOrDefault();

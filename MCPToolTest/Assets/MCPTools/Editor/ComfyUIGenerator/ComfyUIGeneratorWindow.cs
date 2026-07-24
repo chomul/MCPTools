@@ -12,7 +12,7 @@ namespace MCPTools.Editor
     /// <summary>
     /// 3단계 생성 창입니다. (메뉴: Tools/MCP/3. ComfyUI Generator)
     /// 브리지 서버 시작/종료, 워크플로 선택과 변수 편집(원본 JSON 기본값), PromptSet 항목 선택,
-    /// 후보 4개 생성(비동기·취소 가능) → 썸네일 선택 → 확정/재생성 흐름을 제공합니다.
+    /// 후보 N개 생성(기본 4개, 비동기·취소 가능) → 썸네일 선택 → 확정/재생성 흐름을 제공합니다.
     /// </summary>
     public class ComfyUIGeneratorWindow : EditorWindow
     {
@@ -22,6 +22,10 @@ namespace MCPTools.Editor
         private const float ThumbnailSize = 160f;
         private const double ServerCheckIntervalSeconds = 5.0;
         private const float LeftColumnWidth = 320f;
+
+        // 후보 개수 슬라이더 범위. 상한은 ComfyUI 큐가 한 번에 처리하기 현실적인 수준으로 잡았다.
+        private const int MinCandidateCount = 1;
+        private const int MaxCandidateCount = 12;
 
         /// <summary>변수 1개의 편집 상태입니다 (매니페스트 정의 + 현재 값).</summary>
         private class VariableState
@@ -81,6 +85,10 @@ namespace MCPTools.Editor
         private bool _comfyAlive;
         private bool _serverChecking;
         private double _nextServerCheck;
+        private bool _remoteShutdownRunning;
+
+        // 지금 포트에 떠 있는 브리지의 스크립트 경로 (/health). 원격 종료 확인 다이얼로그에 표시.
+        private string _bridgeScriptPath = string.Empty;
 
         /// <summary>생성 창을 엽니다.</summary>
         [MenuItem("Tools/MCP/3. ComfyUI Generator", false, 3)]
@@ -128,6 +136,7 @@ namespace MCPTools.Editor
                     bool comfyCameAlive = health.comfyAlive && !_comfyAlive;
                     _bridgeAlive = health.ok;
                     _comfyAlive = health.comfyAlive;
+                    _bridgeScriptPath = health.scriptPath;
 
                     // 브리지가 살아났고 워크플로 목록이 아직 없으면 자동 로드.
                     // ComfyUI가 미연결→연결로 바뀐 경우에도 1회 재로드해
@@ -220,6 +229,10 @@ namespace MCPTools.Editor
 
         private void DrawServerSection()
         {
+            // 이 에디터 세션이 시작한 서버만 PID를 알기 때문에 프로세스 종료가 가능하다.
+            // 그 외(다른 프로젝트 / 에디터 재시작 후)는 [원격 종료]로 처리한다.
+            bool ownProcess = ComfyUIServerLauncher.IsLaunchedProcessAlive();
+
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 using (new EditorGUILayout.HorizontalScope())
@@ -237,13 +250,37 @@ namespace MCPTools.Editor
                         }
                     }
 
-                    using (new EditorGUI.DisabledScope(!ComfyUIServerLauncher.IsLaunchedProcessAlive()))
+                    using (new EditorGUI.DisabledScope(!ownProcess))
                     {
                         if (GUILayout.Button("서버 종료", GUILayout.Width(SmallButtonWidth), GUILayout.Height(ButtonHeight)))
                         {
                             StopServer();
                         }
                     }
+
+                    if (_bridgeAlive && !ownProcess)
+                    {
+                        using (new EditorGUI.DisabledScope(_remoteShutdownRunning))
+                        {
+                            if (GUILayout.Button("원격 종료", GUILayout.Width(SmallButtonWidth), GUILayout.Height(ButtonHeight)))
+                            {
+                                _ = ShutdownForeignServerAsync();
+                            }
+                        }
+                    }
+                }
+
+                // 두 버튼이 동시에 비활성인 상태(외부에서 띄운 서버가 이미 포트를 쓰는 중)는
+                // 안내가 없으면 "도구가 고장난 것"으로 보인다. 원인과 조치를 반드시 표시한다.
+                if (_bridgeAlive && !ownProcess)
+                {
+                    EditorGUILayout.HelpBox(
+                        $"이미 실행 중인 브리지 서버가 {_settings.bridgeServerUrl}에 응답하고 있습니다. " +
+                        "다른 Unity 프로젝트에서 시작했거나, 이 에디터를 재시작해 프로세스 정보를 잃은 경우입니다. " +
+                        "그대로 사용해도 생성은 정상 동작합니다.\n" +
+                        "이 프로젝트의 서버로 바꾸려면 [원격 종료]로 내린 뒤 [서버 시작]을 누르세요. " +
+                        "두 서버를 함께 쓰려면 Tools/MCP/Settings에서 브리지 서버 주소의 포트를 다른 번호로 바꾸세요.",
+                        MessageType.Info);
                 }
 
                 using (new EditorGUILayout.HorizontalScope())
@@ -285,6 +322,60 @@ namespace MCPTools.Editor
             }
         }
 
+        /// <summary>
+        /// 이 세션이 시작하지 않아 PID를 모르는 브리지 서버를 <c>POST /shutdown</c>으로 내립니다.
+        /// 구버전 브리지(엔드포인트 없음)면 콘솔 창을 닫도록 안내합니다.
+        /// </summary>
+        private async Task ShutdownForeignServerAsync()
+        {
+            // 어느 서버를 내리는지 /health의 scriptPath로 알려준다 — 다른 프로젝트의
+            // 설치본을 실수로 종료하는 것을 막기 위한 확인 정보다.
+            string target = string.IsNullOrEmpty(_bridgeScriptPath)
+                ? _settings.bridgeServerUrl
+                : $"{_settings.bridgeServerUrl}\n({_bridgeScriptPath})";
+
+            if (!EditorUtility.DisplayDialog("브리지 서버 원격 종료",
+                    $"실행 중인 브리지 서버를 종료합니다.\n{target}\n\n" +
+                    "다른 Unity 프로젝트가 이 서버를 쓰고 있다면 그 프로젝트의 생성 작업도 중단됩니다. " +
+                    "계속할까요?",
+                    "종료", "취소"))
+            {
+                return;
+            }
+
+            _remoteShutdownRunning = true;
+            try
+            {
+                bool supported;
+                using (var client = new BridgeClient(_settings))
+                {
+                    supported = await client.ShutdownAsync();
+                }
+
+                if (supported)
+                {
+                    _statusMessage = "브리지 서버에 종료를 요청했습니다. 잠시 후 상태가 갱신됩니다.";
+                }
+                else
+                {
+                    EditorUtility.DisplayDialog("브리지 서버 원격 종료",
+                        "실행 중인 브리지 서버가 원격 종료를 지원하지 않는 구버전입니다.\n\n" +
+                        "서버를 띄운 콘솔 창을 직접 닫거나, 시작한 Unity 프로젝트의 3단계 창에서 " +
+                        "[서버 종료]를 눌러주세요.", "확인");
+                }
+            }
+            catch (Exception e)
+            {
+                EditorUtility.DisplayDialog("브리지 서버 원격 종료 실패", e.Message, "확인");
+            }
+            finally
+            {
+                _remoteShutdownRunning = false;
+                _nextServerCheck = EditorApplication.timeSinceStartup + 1.0;
+                Repaint();
+            }
+        }
+
         private void StopServer()
         {
             try
@@ -314,7 +405,7 @@ namespace MCPTools.Editor
                     if (_promptSetPaths.Length == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            $"{_settings.docsRootPath} 폴더에 PromptSet_*.json이 없습니다. " +
+                            $"{MCPToolFolders.PromptSetDir(_settings)} 폴더에 PromptSet_*.json이 없습니다. " +
                             "2단계(Tools/MCP/2. Prompt Builder)에서 먼저 저장해주세요.", MessageType.Warning);
                     }
                     else
@@ -1049,6 +1140,22 @@ namespace MCPTools.Editor
                     MessageType.Warning);
             }
 
+            // 후보 개수는 설정 에셋(candidateCount)에 저장된다. 생성할 때마다 조정하는 값이라
+            // Tools/MCP/Settings까지 가지 않고 이 창에서 바로 바꿀 수 있게 노출한다.
+            EditorGUI.BeginChangeCheck();
+            int newCount = EditorGUILayout.IntSlider(
+                new GUIContent("후보 개수",
+                    "한 번에 생성할 후보 이미지/사운드 개수입니다. 시드를 1씩 올려가며 생성하므로 " +
+                    "개수가 많을수록 생성 시간과 VRAM 사용량이 늘어납니다."),
+                Mathf.Clamp(_settings.candidateCount, MinCandidateCount, MaxCandidateCount),
+                MinCandidateCount, MaxCandidateCount);
+            if (EditorGUI.EndChangeCheck())
+            {
+                Undo.RecordObject(_settings, "MCP Tools 후보 개수 변경");
+                _settings.candidateCount = newCount;
+                EditorUtility.SetDirty(_settings);
+            }
+
             using (new EditorGUI.DisabledScope(!canGenerate))
             {
                 using (new EditorGUILayout.HorizontalScope())
@@ -1622,17 +1729,9 @@ namespace MCPTools.Editor
 
         private void RefreshPromptSetPaths()
         {
-            string docsRoot = _settings != null ? _settings.docsRootPath : "Assets/Docs";
-            if (!Directory.Exists(docsRoot))
-            {
-                _promptSetPaths = new string[0];
-                return;
-            }
-
-            _promptSetPaths = Directory.GetFiles(docsRoot, "PromptSet_*.json", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(File.GetLastWriteTime)
-                .Select(p => p.Replace('\\', '/'))
-                .ToArray();
+            // 새 하위 폴더(2_PromptSet)와 구 위치(Docs 루트)를 함께 훑는다. 최신 파일이 앞에 온다.
+            _promptSetPaths = MCPToolFolders.FindDocuments(
+                MCPToolFolders.DocsRoot(_settings), MCPToolFolders.PromptSetFolder, "PromptSet_*.json");
         }
 
         private void LoadSelectedPromptSet()
@@ -1688,7 +1787,7 @@ namespace MCPTools.Editor
 
         /// <summary>
         /// PromptSet 없이 변수 UI의 프롬프트만으로 생성할 때 사용할 수동 항목을 만듭니다.
-        /// 후보는 Assets/Generated/Candidates/manual_{워크플로}/에 저장됩니다.
+        /// 후보는 Assets/Generated/3_Candidates/manual_{워크플로}/에 저장됩니다.
         /// </summary>
         private PromptItem CreateManualItem()
         {

@@ -31,7 +31,7 @@ namespace MCPTools.Editor
             McpToolRegistry.Register(
                 "mcptools_generate_candidates",
                 "3단계 후보 생성 Job을 브리지 서버 경유로 시작합니다 (비동기, 완료까지 기다리지 않음). 기준 시드부터 " +
-                "+1씩 증가시키며 후보를 생성해 Assets/Generated/Candidates/{assetItemId}/에 저장합니다. " +
+                "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{assetItemId}/에 저장합니다. " +
                 "완료 여부와 결과는 mcptools_list_candidates로 폴링하세요. " +
                 "파라미터: promptSetPath(필수, Assets/ 상대 PromptSet JSON), assetItemId(필수), " +
                 "workflowName(선택: GenerateImage|GenerateImageFlux|UI|StyleChange|Audio, 기본은 항목 종류별 자동 선택), " +
@@ -49,7 +49,7 @@ namespace MCPTools.Editor
 
             McpToolRegistry.Register(
                 "mcptools_select_candidate",
-                "3단계 후보 1개를 확정합니다: Assets/Generated/Images/(오디오는 Audio/)로 복사하고 " +
+                "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/Images/(오디오는 Audio/)로 복사하고 " +
                 "GenerationResults.json에 기록하며, 이미지 항목은 Sprite 임포트 설정을 적용합니다(RawImage 대상은 Texture 유지). " +
                 "파라미터: assetItemId(필수), candidatePath(필수, mcptools_list_candidates가 반환한 후보 경로). " +
                 "반환 data: { selectedPath }.",

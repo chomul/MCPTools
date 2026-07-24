@@ -336,7 +336,7 @@ namespace MCPTools.Editor
             string promptSource = "template")
         {
             MCPToolSettings settings = MCPToolSettings.GetOrCreate();
-            string docsRoot = string.IsNullOrEmpty(settings.docsRootPath) ? "Assets/Docs" : settings.docsRootPath;
+            string docsRoot = MCPToolFolders.SpriteSheetDir(settings);
 
             string id = DateTime.Now.ToString("yyyyMMdd_HHmmss");
             string assetPath = $"{docsRoot}/SpriteSheetPrompt_{id}.json".Replace('\\', '/');
@@ -374,9 +374,20 @@ namespace MCPTools.Editor
                 { "prompt", prompt }
             };
 
+            // 하위 폴더를 이번에 새로 만든 경우 AssetDatabase가 폴더 자체를 모르므로
+            // ImportAsset이 아니라 Refresh로 반영해야 프로젝트 창에 바로 보인다 (D13과 같은 이유).
+            bool createdFolder = !Directory.Exists(Path.GetFullPath(docsRoot));
             Directory.CreateDirectory(Path.GetFullPath(docsRoot));
             File.WriteAllText(Path.GetFullPath(assetPath), MiniJson.Serialize(doc));
-            AssetDatabase.ImportAsset(assetPath);
+            if (createdFolder)
+            {
+                AssetDatabase.Refresh();
+            }
+            else
+            {
+                AssetDatabase.ImportAsset(assetPath);
+            }
+
             return assetPath;
         }
 

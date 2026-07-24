@@ -52,6 +52,16 @@ namespace MCPTools.Editor
         private Vector2 _scroll;
         private string _statusMessage = string.Empty;
 
+        // 저장해 둔 목록 이어서 편집하기: 후보 파일 목록과 현재 불러온 파일 경로.
+        // _loadedListPath가 비어 있지 않으면 [저장] 시 덮어쓰기/새 파일을 선택할 수 있다.
+        private string[] _assetListPaths = new string[0];
+        private int _selectedListIndex;
+        private string _loadedListPath = string.Empty;
+
+        // _loadedListPath가 가리키는 문서 인스턴스. 스캔/AI 생성이 _document를 통째로 교체하면
+        // 참조가 달라지므로, 관계 없는 파일에 덮어쓰기를 제안하는 일을 막을 수 있다.
+        private AssetListDocument _loadedDocument;
+
         // AI CLI 연동 상태
         private List<AiCliTool> _aiTools;
         private string[] _aiOptions = new string[0];
@@ -89,6 +99,7 @@ namespace MCPTools.Editor
             // 처음 여는 프로젝트에서 기획서/출력 폴더가 없어 사용자가 직접 만들어야 하는 것을 막는다 (D12).
             MCPToolFolders.EnsureWorkFolders(_settings);
             RefreshDesignDocList();
+            RefreshAssetListPaths();
 
             _customAiCommand = EditorPrefs.GetString(PrefKeyCustomCommand, string.Empty);
             _aiTimeoutSeconds = EditorPrefs.GetInt(PrefKeyTimeout, 300);
@@ -110,6 +121,8 @@ namespace MCPTools.Editor
                 _settings = MCPToolSettings.GetOrCreate();
             }
 
+            DrawLoadExistingSection();
+            EditorGUILayout.Space(4f);
             DrawScanOnlyToggle();
             EditorGUILayout.Space(4f);
             DrawAiSection();
@@ -484,6 +497,112 @@ namespace MCPTools.Editor
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// 저장해 둔 <c>AssetList_*.json</c>을 골라 불러오는 영역입니다.
+        /// 불러온 뒤에는 표에서 항목을 추가·수정·삭제하고 같은 파일에 덮어쓸 수 있습니다.
+        /// </summary>
+        private void DrawLoadExistingSection()
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (_assetListPaths.Length == 0)
+                    {
+                        EditorGUILayout.LabelField(
+                            $"저장된 목록이 없습니다 ({DocsRootPath()}/AssetList_*.json). " +
+                            "아래에서 새로 만든 뒤 [저장]하세요.",
+                            EditorStyles.miniLabel);
+                    }
+                    else
+                    {
+                        // 경로 전체는 길어서 드롭다운이 읽기 어렵다. 파일명만 표시한다.
+                        _selectedListIndex = EditorGUILayout.Popup("기존 목록",
+                            Mathf.Clamp(_selectedListIndex, 0, _assetListPaths.Length - 1),
+                            _assetListPaths.Select(Path.GetFileName).ToArray());
+                    }
+
+                    using (new EditorGUI.DisabledScope(_assetListPaths.Length == 0))
+                    {
+                        if (GUILayout.Button("불러오기", GUILayout.Width(SmallButtonWidth)))
+                        {
+                            LoadSelectedDocument();
+                        }
+                    }
+
+                    if (GUILayout.Button("새로고침", GUILayout.Width(SmallButtonWidth)))
+                    {
+                        RefreshAssetListPaths();
+                    }
+                }
+
+                if (IsEditingLoadedFile())
+                {
+                    EditorGUILayout.LabelField(
+                        $"편집 중: {_loadedListPath} — [저장] 시 덮어쓸지 새 파일로 저장할지 선택합니다.",
+                        EditorStyles.miniLabel);
+                }
+            }
+        }
+
+        /// <summary>선택한 목록 JSON을 불러와 편집 대상 문서로 삼습니다.</summary>
+        private void LoadSelectedDocument()
+        {
+            if (_assetListPaths.Length == 0)
+            {
+                return;
+            }
+
+            string path = _assetListPaths[Mathf.Clamp(_selectedListIndex, 0, _assetListPaths.Length - 1)];
+
+            // 편집 중인 목록을 말없이 버리지 않는다 (스캔 교체 흐름과 같은 규칙).
+            if (_document != null && _document.items.Count > 0 &&
+                !EditorUtility.DisplayDialog("에셋 리스트업",
+                    $"현재 목록({_document.items.Count}개)을 버리고 {Path.GetFileName(path)}을(를) 불러올까요?",
+                    "불러오기", "취소"))
+            {
+                return;
+            }
+
+            try
+            {
+                _document = AssetListBuilder.Load(path);
+                _loadedListPath = path;
+                _loadedDocument = _document;
+                _statusMessage = $"불러오기 완료: {path} (항목 {_document.items.Count}개) — " +
+                                 "표에서 추가/수정/삭제한 뒤 [저장]하세요.";
+            }
+            catch (System.Exception e)
+            {
+                EditorUtility.DisplayDialog("에셋 리스트업", $"목록을 불러오지 못했습니다.\n{e.Message}", "확인");
+            }
+        }
+
+        /// <summary>
+        /// 현재 편집 중인 문서가 불러온 파일 그대로인지 여부입니다.
+        /// 스캔/AI 생성으로 문서가 교체되면 false가 되어 덮어쓰기를 제안하지 않습니다.
+        /// </summary>
+        private bool IsEditingLoadedFile()
+        {
+            return !string.IsNullOrEmpty(_loadedListPath) &&
+                   _document != null &&
+                   ReferenceEquals(_loadedDocument, _document) &&
+                   File.Exists(_loadedListPath);
+        }
+
+        private string DocsRootPath()
+        {
+            return _settings != null ? _settings.docsRootPath : "Assets/Docs";
+        }
+
+        private void RefreshAssetListPaths()
+        {
+            // 새 하위 폴더(1_AssetList)와 구 위치(Docs 루트)를 함께 훑는다. 최신 파일이 앞에 온다.
+            _assetListPaths = MCPToolFolders.FindDocuments(
+                DocsRootPath(), MCPToolFolders.AssetListFolder, "AssetList_*.json");
+            _selectedListIndex = Mathf.Clamp(_selectedListIndex, 0, Mathf.Max(0, _assetListPaths.Length - 1));
         }
 
         private void RefreshDesignDocList()
@@ -1051,7 +1170,31 @@ namespace MCPTools.Editor
 
             try
             {
-                string savedPath = AssetListBuilder.Save(_document);
+                // 불러와서 편집한 목록은 같은 파일에 덮어쓰는 것이 기본 기대다.
+                // 다만 원본을 남기고 싶은 경우도 있어 새 파일 저장을 함께 제시한다.
+                string targetPath = null;
+                if (IsEditingLoadedFile())
+                {
+                    int choice = EditorUtility.DisplayDialogComplex("에셋 리스트업",
+                        $"불러온 목록을 편집 중입니다.\n{_loadedListPath}\n\n어떻게 저장할까요?",
+                        "덮어쓰기", "취소", "새 파일로 저장");
+                    if (choice == 1)
+                    {
+                        return;
+                    }
+
+                    targetPath = choice == 0 ? _loadedListPath : null;
+                }
+
+                string savedPath = AssetListBuilder.Save(_document, targetPath);
+
+                // 이어서 편집할 수 있도록 방금 저장한 파일을 편집 대상으로 유지한다.
+                _loadedListPath = savedPath;
+                _loadedDocument = _document;
+                RefreshAssetListPaths();
+                int index = System.Array.IndexOf(_assetListPaths, savedPath);
+                _selectedListIndex = index >= 0 ? index : 0;
+
                 _statusMessage = $"저장 완료: {savedPath}";
                 ShowNotification(new GUIContent("목록을 저장했습니다."));
             }

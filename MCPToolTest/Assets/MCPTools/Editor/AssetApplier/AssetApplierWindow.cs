@@ -125,7 +125,7 @@ namespace MCPTools.Editor
                     if (_assetListPaths.Length == 0)
                     {
                         EditorGUILayout.HelpBox(
-                            $"{_settings.docsRootPath} 폴더에 AssetList_*.json이 없습니다. " +
+                            $"{MCPToolFolders.AssetListDir(_settings)} 폴더에 AssetList_*.json이 없습니다. " +
                             "1단계(Tools/MCP/1. Asset Listup)에서 먼저 저장해주세요.", MessageType.Warning);
                     }
                     else
@@ -540,17 +540,9 @@ namespace MCPTools.Editor
 
         private void RefreshAssetListPaths()
         {
-            string docsRoot = _settings != null ? _settings.docsRootPath : "Assets/Docs";
-            if (!Directory.Exists(docsRoot))
-            {
-                _assetListPaths = new string[0];
-                return;
-            }
-
-            _assetListPaths = Directory.GetFiles(docsRoot, "AssetList_*.json", SearchOption.TopDirectoryOnly)
-                .OrderByDescending(File.GetLastWriteTime)
-                .Select(p => p.Replace('\\', '/'))
-                .ToArray();
+            // 새 하위 폴더(1_AssetList)와 구 위치(Docs 루트)를 함께 훑는다. 최신 파일이 앞에 온다.
+            _assetListPaths = MCPToolFolders.FindDocuments(
+                MCPToolFolders.DocsRoot(_settings), MCPToolFolders.AssetListFolder, "AssetList_*.json");
         }
 
         private void LoadSelectedAssetList()

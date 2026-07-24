@@ -93,6 +93,11 @@ namespace MCPTools.Editor
             int ppu = EditorGUILayout.IntField(
                 new GUIContent("Sprite PPU", "확정 시 Sprite 임포트에 적용할 Pixels Per Unit 값입니다."),
                 _settings.spritePixelsPerUnit);
+            bool shutdownOnQuit = EditorGUILayout.Toggle(
+                new GUIContent("종료 시 브리지 정리",
+                    "Unity를 종료할 때 이 도구로 시작한 브리지 서버도 함께 종료합니다. " +
+                    "끄면 브리지가 계속 실행된 채 남아 다음 실행에서 재사용됩니다."),
+                _settings.shutdownBridgeOnEditorQuit);
 
             if (EditorGUI.EndChangeCheck())
             {
@@ -109,6 +114,7 @@ namespace MCPTools.Editor
                 _settings.candidateCount = Mathf.Max(1, candidateCount);
                 _settings.unloadModelsAfterBatch = unloadAfterBatch;
                 _settings.spritePixelsPerUnit = Mathf.Max(1, ppu);
+                _settings.shutdownBridgeOnEditorQuit = shutdownOnQuit;
                 EditorUtility.SetDirty(_settings);
             }
 

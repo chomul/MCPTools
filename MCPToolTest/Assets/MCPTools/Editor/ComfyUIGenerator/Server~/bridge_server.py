@@ -40,7 +40,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 브리지 서버 자체 버전. /health 응답에 실려 나가며, Unity가 다른 위치·다른 버전의
 # 브리지에 붙었는지 판별하는 데 씁니다. 브리지 API가 바뀌면 함께 올립니다.
-BRIDGE_VERSION = "0.1.0"
+BRIDGE_VERSION = "0.2.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.abspath(__file__)
@@ -55,6 +55,9 @@ USER_DIR = ""
 
 COMFY_URL = "http://127.0.0.1:8188"
 CLIENT_ID = uuid.uuid4().hex
+
+# 실제로 바인딩한 주소 (main에서 설정). /shutdown이 로컬 전용인지 판단하는 데 씁니다.
+BIND_HOST = "127.0.0.1"
 
 # jobId -> job dict (락으로 보호)
 JOBS = {}
@@ -634,6 +637,8 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 self.handle_upload()
             elif path == "/free":
                 self.handle_free()
+            elif path == "/shutdown":
+                self.handle_shutdown()
             else:
                 self.send_error_json("알 수 없는 경로: %s" % path, 404)
         except Exception as e:
@@ -791,6 +796,30 @@ class BridgeHandler(BaseHTTPRequestHandler):
                         "type": data.get("type", "input")})
 
 
+    def handle_shutdown(self):
+        """서버를 정상 종료합니다.
+
+        브리지를 시작한 Unity 세션이 아니면 PID를 모르기 때문에(SessionState는 에디터
+        재시작 시 사라진다) 프로세스를 죽일 수 없습니다. 그 경우 이 엔드포인트로
+        서버가 스스로 내려가게 합니다. 서버는 127.0.0.1에만 바인딩되므로 로컬에서만
+        호출할 수 있습니다.
+
+        serve_forever()를 돌리는 스레드에서 shutdown()을 호출하면 교착되므로,
+        응답을 먼저 보내고 별도 스레드에서 종료합니다.
+        """
+        # 로컬 외 주소에 바인딩한 경우(--host 지정)는 같은 네트워크의 다른 기기도
+        # 이 엔드포인트를 부를 수 있으므로 거부한다. 그 경우 서버를 띄운 콘솔에서 끈다.
+        if BIND_HOST not in ("127.0.0.1", "localhost", "::1"):
+            self.send_error_json(
+                "로컬 외 주소(%s)에 바인딩된 서버는 원격 종료를 지원하지 않습니다. "
+                "서버를 실행한 콘솔 창에서 종료해주세요." % BIND_HOST, 403)
+            return
+
+        self.send_json({"ok": True, "message": "브리지 서버를 종료합니다."})
+        print("[bridge] /shutdown 요청을 받아 서버를 종료합니다.")
+        threading.Thread(target=self.server.shutdown, daemon=True).start()
+
+
 class BridgeHTTPServer(ThreadingHTTPServer):
     """포트 중복 바인딩을 반드시 실패시키는 HTTP 서버.
 
@@ -827,7 +856,7 @@ def create_server(host, port):
 
 
 def main():
-    global COMFY_URL, USER_DIR, JOB_TIMEOUT_SEC
+    global COMFY_URL, USER_DIR, JOB_TIMEOUT_SEC, BIND_HOST
     parser = argparse.ArgumentParser(description="MCPTools ComfyUI 브리지 서버")
     parser.add_argument("--host", default="127.0.0.1",
                         help="바인딩할 주소. 기본값 127.0.0.1(로컬 전용). "
@@ -853,6 +882,7 @@ def main():
         sys.stderr = log_stream
 
     host = (args.host or "127.0.0.1").strip() or "127.0.0.1"
+    BIND_HOST = host
 
     server = create_server(host, args.port)
     print("[bridge] MCPTools 브리지 서버 시작: http://%s:%d (ComfyUI: %s, 버전 %s)"
