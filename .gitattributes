@@ -1,0 +1,84 @@
+# =============================================================================
+# C:\Project\CreateMCP 저장소 루트 .gitattributes (Task7 U12·D14)
+# GitHub + Unity Package Manager(git URL) 배포용 — 줄바꿈/바이너리 정규화
+# =============================================================================
+
+# 기본: git이 텍스트 여부를 자동 판별해 정규화
+* text=auto
+
+# -----------------------------------------------------------------------------
+# Unity YAML/텍스트 에셋 — text + LF 고정
+# (플랫폼 간 diff 노이즈 방지, Unity 직렬화 파일은 LF 기준)
+# -----------------------------------------------------------------------------
+*.meta            text eol=lf
+*.asset           text eol=lf
+*.prefab          text eol=lf
+*.unity           text eol=lf
+*.asmdef          text eol=lf
+*.asmref          text eol=lf
+*.mat             text eol=lf
+*.anim            text eol=lf
+*.controller      text eol=lf
+*.overrideController text eol=lf
+*.physicsMaterial text eol=lf
+*.physicsMaterial2D text eol=lf
+*.inputactions    text eol=lf
+*.shader          text eol=lf
+*.shadergraph     text eol=lf
+*.shadersubgraph  text eol=lf
+*.uss             text eol=lf
+*.uxml            text eol=lf
+
+# 코드/문서/데이터
+*.cs              text eol=lf
+*.py              text eol=lf
+*.json            text eol=lf
+*.md              text eol=lf
+*.txt             text eol=lf
+*.xml             text eol=lf
+*.yml             text eol=lf
+*.yaml            text eol=lf
+
+# PowerShell 스크립트는 CRLF (Windows PowerShell 호환)
+*.ps1             text eol=crlf
+*.psm1            text eol=crlf
+*.psd1            text eol=crlf
+
+# -----------------------------------------------------------------------------
+# 바이너리 명시 — 줄바꿈 변환/diff 금지
+# -----------------------------------------------------------------------------
+# 이미지
+*.png             binary
+*.jpg             binary
+*.jpeg            binary
+*.webp            binary
+*.gif             binary
+*.bmp             binary
+*.tga             binary
+*.psd             binary
+*.exr             binary
+*.hdr             binary
+# 오디오
+*.wav             binary
+*.mp3             binary
+*.ogg             binary
+*.aif             binary
+*.aiff            binary
+# 3D/폰트
+*.fbx             binary
+*.blend           binary
+*.ttf             binary
+*.otf             binary
+# 아카이브/라이브러리
+*.zip             binary
+*.unitypackage    binary
+*.dll             binary
+*.so              binary
+*.dylib           binary
+*.pdb             binary
+*.exe             binary
+
+# 대용량 바이너리(5MB 초과)가 늘어나면 Git LFS 도입을 검토하되,
+# **패키지 폴더(MCPToolTest/Assets/MCPTools/) 안의 파일에는 LFS를 절대 쓰지 말 것** —
+# Unity Package Manager의 git URL 설치는 LFS를 지원하지 않아
+# 사용자에게 실제 파일 대신 LFS 포인터 텍스트가 내려간다 (Task7 U12).

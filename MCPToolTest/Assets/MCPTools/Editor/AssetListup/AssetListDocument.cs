@@ -1,0 +1,213 @@
+using System;
+using System.Collections.Generic;
+
+namespace MCPTools.Editor
+{
+    /// <summary>
+    /// 에셋 리스트업 1단계 산출물의 항목 1개입니다.
+    /// MiniJson 직렬화를 위해 <see cref="ToDictionary"/>/<see cref="FromDictionary"/>를 제공합니다.
+    /// </summary>
+    [Serializable]
+    public class AssetListItem
+    {
+        /// <summary>항목 고유 ID (예: "item_001").</summary>
+        public string id = string.Empty;
+
+        /// <summary>에셋 이름.</summary>
+        public string name = string.Empty;
+
+        /// <summary>설명/용도.</summary>
+        public string description = string.Empty;
+
+        /// <summary>에셋 종류: "image" / "ui" / "audio".</summary>
+        public string assetType = "image";
+
+        /// <summary>적용 대상 프리팹 경로 (Assets/ 기준 상대 경로). 비어 있으면 미지정.</summary>
+        public string targetPrefabPath = string.Empty;
+
+        /// <summary>
+        /// 적용 대상 씬 경로 (Assets/ 기준 상대 경로). 씬에 직접 배치된 오브젝트 대상 항목이면
+        /// 비어 있지 않으며, <see cref="targetPrefabPath"/>와 상호 배타입니다
+        /// (씬 항목은 targetObjectPath가 씬 루트 기준 계층 경로).
+        /// </summary>
+        public string targetScenePath = string.Empty;
+
+        /// <summary>적용 대상 GameObject 계층 경로 (프리팹 항목은 프리팹 루트 기준, 씬 항목은 씬 루트 기준).</summary>
+        public string targetObjectPath = string.Empty;
+
+        /// <summary>
+        /// (선택, 오디오 항목 전용) 적용 대상 컴포넌트 타입 이름 (예: "PlayerController").
+        /// <see cref="targetField"/>와 함께 지정하면 AudioSource.clip 대신 해당 컴포넌트의
+        /// 직렬화된 AudioClip 필드에 적용합니다. 비어 있으면 기존 AudioSource.clip 동작.
+        /// </summary>
+        public string targetComponent = string.Empty;
+
+        /// <summary>
+        /// (선택, 오디오 항목 전용) 적용 대상 직렬화 필드 경로 (예: "jumpSound").
+        /// <see cref="targetComponent"/>와 함께 지정해야 합니다.
+        /// </summary>
+        public string targetField = string.Empty;
+
+        /// <summary>
+        /// 오디오 항목이 임의 컴포넌트의 AudioClip 필드를 대상으로 지정했는지 여부입니다
+        /// (targetComponent와 targetField가 모두 지정된 경우).
+        /// </summary>
+        public bool HasCustomAudioTarget
+        {
+            get
+            {
+                return assetType == "audio"
+                    && !string.IsNullOrEmpty(targetComponent)
+                    && !string.IsNullOrEmpty(targetField);
+            }
+        }
+
+        /// <summary>씬에 직접 배치된 오브젝트 대상 항목인지 여부입니다.</summary>
+        public bool IsSceneItem
+        {
+            get { return !string.IsNullOrEmpty(targetScenePath); }
+        }
+
+        /// <summary>UI 여부 지정 값: -1 미지정, 0 아니오, 1 예. 저장 전 반드시 0/1로 확정해야 합니다.</summary>
+        public int uiFlag = -1;
+
+        /// <summary>항목 상태 (예: "pending", "prompted", "generated", "applied").</summary>
+        public string status = "pending";
+
+        /// <summary>UI 여부가 지정되었는지 여부입니다.</summary>
+        public bool IsUISpecified
+        {
+            get { return uiFlag >= 0; }
+        }
+
+        /// <summary>UI 여부입니다 (미지정이면 false).</summary>
+        public bool IsUI
+        {
+            get { return uiFlag == 1; }
+        }
+
+        /// <summary>MiniJson 직렬화용 딕셔너리로 변환합니다.</summary>
+        public Dictionary<string, object> ToDictionary()
+        {
+            return new Dictionary<string, object>
+            {
+                { "id", id },
+                { "name", name },
+                { "description", description },
+                { "assetType", assetType },
+                { "targetPrefabPath", targetPrefabPath },
+                { "targetScenePath", targetScenePath },
+                { "targetObjectPath", targetObjectPath },
+                { "targetComponent", targetComponent },
+                { "targetField", targetField },
+                { "isUI", uiFlag == 1 },
+                { "isUISpecified", uiFlag >= 0 },
+                { "status", status }
+            };
+        }
+
+        /// <summary>MiniJson 역직렬화 딕셔너리에서 항목을 복원합니다.</summary>
+        /// <param name="dict">MiniJson.Deserialize 결과 딕셔너리.</param>
+        /// <returns>복원된 항목. dict가 null이면 null.</returns>
+        public static AssetListItem FromDictionary(Dictionary<string, object> dict)
+        {
+            if (dict == null)
+            {
+                return null;
+            }
+
+            var item = new AssetListItem
+            {
+                id = GetString(dict, "id"),
+                name = GetString(dict, "name"),
+                description = GetString(dict, "description"),
+                assetType = GetString(dict, "assetType", "image"),
+                targetPrefabPath = GetString(dict, "targetPrefabPath"),
+                targetScenePath = GetString(dict, "targetScenePath"),
+                targetObjectPath = GetString(dict, "targetObjectPath"),
+                targetComponent = GetString(dict, "targetComponent"),
+                targetField = GetString(dict, "targetField"),
+                status = GetString(dict, "status", "pending")
+            };
+
+            bool specified = !dict.ContainsKey("isUISpecified") || (dict["isUISpecified"] is bool s && s);
+            bool isUI = dict.TryGetValue("isUI", out object v) && v is bool b && b;
+            item.uiFlag = specified ? (isUI ? 1 : 0) : -1;
+            return item;
+        }
+
+        private static string GetString(Dictionary<string, object> dict, string key, string fallback = "")
+        {
+            return dict.TryGetValue(key, out object v) && v is string s ? s : fallback;
+        }
+    }
+
+    /// <summary>
+    /// 에셋 리스트업 1단계 산출물 문서입니다. `Assets/Docs/AssetList_{yyyyMMdd_HHmm}.json`으로 저장됩니다.
+    /// </summary>
+    [Serializable]
+    public class AssetListDocument
+    {
+        /// <summary>입력으로 사용한 기획서 경로 (Assets/ 기준 상대 경로).</summary>
+        public string designDocPath = string.Empty;
+
+        /// <summary>스캔 루트 경로 (Assets/ 기준 상대 경로).</summary>
+        public string scanRootPath = "Assets";
+
+        /// <summary>문서 생성 시각 (yyyy-MM-dd HH:mm).</summary>
+        public string createdAt = string.Empty;
+
+        /// <summary>에셋 항목 목록입니다.</summary>
+        public List<AssetListItem> items = new List<AssetListItem>();
+
+        /// <summary>MiniJson 직렬화용 딕셔너리로 변환합니다.</summary>
+        public Dictionary<string, object> ToDictionary()
+        {
+            var itemList = new List<object>();
+            foreach (AssetListItem item in items)
+            {
+                itemList.Add(item.ToDictionary());
+            }
+
+            return new Dictionary<string, object>
+            {
+                { "designDocPath", designDocPath },
+                { "scanRootPath", scanRootPath },
+                { "createdAt", createdAt },
+                { "items", itemList }
+            };
+        }
+
+        /// <summary>MiniJson 역직렬화 딕셔너리에서 문서를 복원합니다.</summary>
+        /// <param name="dict">MiniJson.Deserialize 결과 딕셔너리.</param>
+        /// <returns>복원된 문서. dict가 null이면 null.</returns>
+        public static AssetListDocument FromDictionary(Dictionary<string, object> dict)
+        {
+            if (dict == null)
+            {
+                return null;
+            }
+
+            var doc = new AssetListDocument
+            {
+                designDocPath = dict.TryGetValue("designDocPath", out object d) && d is string ds ? ds : string.Empty,
+                scanRootPath = dict.TryGetValue("scanRootPath", out object r) && r is string rs ? rs : "Assets",
+                createdAt = dict.TryGetValue("createdAt", out object c) && c is string cs ? cs : string.Empty
+            };
+
+            if (dict.TryGetValue("items", out object itemsObj) && itemsObj is List<object> list)
+            {
+                foreach (object entry in list)
+                {
+                    AssetListItem item = AssetListItem.FromDictionary(entry as Dictionary<string, object>);
+                    if (item != null)
+                    {
+                        doc.items.Add(item);
+                    }
+                }
+            }
+
+            return doc;
+        }
+    }
+}

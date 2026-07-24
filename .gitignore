@@ -1,0 +1,95 @@
+# =============================================================================
+# C:\Project\CreateMCP 저장소 루트 .gitignore (Task7 U12·D14)
+#
+# **주의: `*.meta`는 절대 무시하지 말 것**
+# Unity 패키지 에셋은 GUID로 참조되므로 .meta 누락 시 참조가 깨진다 (Task7 U13).
+# 단, 아래에서 명시적으로 무시한 에셋(설정 에셋·Generated 내용물 등)의 .meta는
+# 짝으로 함께 무시한다.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Unity 표준 무시 목록 — Unity 프로젝트(MCPToolTest/) 경로로 스코프
+# -----------------------------------------------------------------------------
+MCPToolTest/[Ll]ibrary/
+MCPToolTest/[Tt]emp/
+MCPToolTest/[Oo]bj/
+MCPToolTest/[Ll]ogs/
+MCPToolTest/[Uu]ser[Ss]ettings/
+MCPToolTest/[Mm]emoryCaptures/
+MCPToolTest/[Bb]uild/
+MCPToolTest/[Bb]uilds/
+MCPToolTest/[Rr]ecordings/
+MCPToolTest/ExportedObj/
+
+# IDE가 생성하는 솔루션/프로젝트 파일 (Unity가 자동 재생성)
+MCPToolTest/*.csproj
+MCPToolTest/*.unityproj
+MCPToolTest/*.sln
+MCPToolTest/*.slnx
+MCPToolTest/.vs/
+MCPToolTest/.idea/
+MCPToolTest/.vscode/
+MCPToolTest/*.suo
+MCPToolTest/*.user
+MCPToolTest/*.userprefs
+MCPToolTest/*.pidb
+MCPToolTest/*.booproj
+MCPToolTest/*.svd
+MCPToolTest/*.pdb
+MCPToolTest/*.mdb
+MCPToolTest/*.opendb
+MCPToolTest/*.VC.db
+
+# Unity 크래시/진단 부산물
+MCPToolTest/sysinfo.txt
+MCPToolTest/crashlytics-build.properties
+
+# -----------------------------------------------------------------------------
+# 개인 환경 설정 에셋 — 커밋 금지
+# [Python 자동 탐지] 등이 개인 PC 절대 경로를 기록할 수 있어 커밋 금지 (Task7 D14).
+# 없으면 에디터가 기본값으로 자동 생성함.
+# -----------------------------------------------------------------------------
+MCPToolTest/Assets/MCPTools/Editor/Common/MCPToolSettings.asset
+MCPToolTest/Assets/MCPTools/Editor/Common/MCPToolSettings.asset.meta
+
+# 도구가 생성하는 사용자별 설정·오버라이드 폴더 (Task7 U2/U6)
+MCPToolTest/Assets/MCPTools.User/
+MCPToolTest/Assets/MCPTools.User.meta
+
+# -----------------------------------------------------------------------------
+# AI 생성 산출물 작업 데이터 — 재생성 가능하므로 커밋 제외
+# 단 Generated.meta(폴더 자체의 .meta)는 무시하지 않고 유지한다:
+# 폴더 GUID를 고정해 Unity가 매번 새 GUID로 재생성하며 diff 노이즈를 만드는 것을
+# 막기 위함. 폴더 내용물과 그 .meta는 전부 무시된다.
+# ※ MCPToolTest/Assets/Docs/ (기획 문서)는 커밋 대상이므로 무시하지 않는다.
+# -----------------------------------------------------------------------------
+MCPToolTest/Assets/Generated/
+
+# -----------------------------------------------------------------------------
+# 구 zip 배포물 — 폐기 예정, 커밋 제외
+# -----------------------------------------------------------------------------
+dist/
+
+# -----------------------------------------------------------------------------
+# Python 브리지 서버 부산물
+# -----------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+
+# -----------------------------------------------------------------------------
+# Claude Code 개인 로컬 설정
+# -----------------------------------------------------------------------------
+.claude/settings.local.json
+
+# -----------------------------------------------------------------------------
+# Windows에서 `>/dev/null` 리다이렉트가 문자 그대로 해석돼 생기는 부산물
+# (git lfs 훅이 여기에 떨어진다 — 실제 파일이 아니므로 커밋 금지)
+# -----------------------------------------------------------------------------
+dev/null/
+MCPToolTest/dev/
+
+# -----------------------------------------------------------------------------
+# 루트 저장소 일원화 전에 MCPToolTest/ 안에 있던 중첩 git 저장소 백업
+# (원격 github.com/chomul/MCPToolTest 에 초기 커밋 보존됨 — 확인 후 삭제 가능)
+# -----------------------------------------------------------------------------
+.mcptooltest-git-backup/
