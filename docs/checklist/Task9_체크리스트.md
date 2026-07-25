@@ -32,8 +32,8 @@
   - **설계 변경 (원안 대비)**: Task 9 문서 §Q2는 `Detect`에 픽셀 버퍼 오버로드를 추가하자고 했으나, `Detect(string imagePath, bool, bool)`가 이미 public이고 **절대 경로를 그대로 처리**(`ResolveFullPath`)하므로 합성 시트 PNG를 시스템 임시 폴더에 쓰고 그 경로로 호출하는 방식을 택했다. 결과: **`SpriteSheetImporter.cs` 원본 무수정** → Task 8 C23/C24와의 충돌 위험 제거. `Detect`는 파일을 쓰지 않으므로 프로젝트에도 아무것도 남지 않는다(`ApplySlices`는 호출하지 않음).
   - 구현 결과: 테스트 7파일 / 메서드 55개(NUnit 케이스 약 74). 합성 시트는 200×200, 50px 셀 4×4, 배경 순백, **격자선 242 무채색 3px**(내부 경계만 — 가장자리에 선을 두면 sliver 셀이 생겨 경계 정리 로직이 개입), 콘텐츠는 채도 190 빨강. 242를 고른 근거는 `GridLineMinChannel(150) < 242 < GridLineMaxChannel(248)`을 만족하면서 동시에 `NearWhiteThreshold(235)` 이상이라 외곽 BFS가 격자선을 넘어 셀 안쪽 배경까지 지운다는 점(중간 회색이면 BFS가 막혀 "비어 보임" 검증이 불가능). 배치는 행0 정상 4칸 / 행1 정상 3칸+작은 점 1칸 / 행2 정상 2칸 / 행3 공백.
   - 기대값: `rows=3`(행3 탈락), 행별 셀 4/4/2, `TotalFrameCount=10`, `LooksEmptyFrameCount=1`, `IncludedRowCount=3`, 정상 셀 `contentRatio=0.16` / 작은 점 `0.01`(→ `looksEmpty`, `include=false`), `cellWidth=cellHeight=50`, rect 하단-좌 원점. `whiteBackground=false`면 rows=4·total=16·looksEmpty=0.
-  - 검증 상태: **Unity 미실행 — 컴파일·Test Runner 검증 대기**. 서브에이전트가 `Detect`의 전 파이프라인(외곽 BFS → fringe → RestorePockets → FeatherEdges → DetectGridBoundaries → RefineGridBoundaries → ClearGridLineBands → 셀 판정)을 소스 상수 그대로 Python으로 시뮬레이션해 위 기대값이 전부 일치함을 확인했다. 주 에이전트는 API 시그니처(`Detect(string,bool,bool)`·`SpriteSheetDetection.Pixels` internal·`ControllerPathForSheet`)와 `sourcePath == 입력 경로`(절대 경로는 `ResolveFullPath`가 그대로 반환), 로케일 테스트의 `SetUp`/`TearDown` 복원, `CultureInfo.InvariantCulture.Clone()`으로 ICU 비의존 처리한 점을 확인했다.
-  - **미확인 가정 3건**(Unity 실행 시 확인): PNG `EncodeToPNG`↔`LoadImage` 바이트 무손실 왕복, NUnit `Assert.AreEqual` 혼합 숫자 타입 오버로드 해석, `File.SetLastWriteTime` 기반 정렬 결정성.
+  - 검증 상태: **✅ Unity 6000.5.2f1에서 EditMode 74/74 통과, 실패 0, 0.27초** (`run_tests` MCP, assembly `MCPTools.Editor.Tests`). 컴파일 오류·경고 0건(`Logs/Editor.log`에 CS#### 0건), `MCPTools.Editor.Tests.dll` 정상 빌드. 부작용 없음 — 프로젝트에 생성된 파일 0개, 시스템 임시 폴더의 합성 시트도 `[TearDown]`이 전부 삭제(잔여 0). 작성 단계에서는 서브에이전트가 `Detect`의 전 파이프라인(외곽 BFS → fringe → RestorePockets → FeatherEdges → DetectGridBoundaries → RefineGridBoundaries → ClearGridLineBands → 셀 판정)을 소스 상수 그대로 Python으로 시뮬레이션해 기대값을 맞췄고, 실행 결과가 그 값과 일치했다.
+  - **미확인 가정 3건 → 전부 해소**: PNG `EncodeToPNG`↔`LoadImage` 무손실 왕복 OK(격자 검출 기대값이 정확히 일치), NUnit `Assert.AreEqual` 혼합 숫자 타입 오버로드 OK, `File.SetLastWriteTime` 기반 정렬 결정성 OK.
   - **주의**: `SpriteSheetImporter`의 판정 상수는 전부 `private const`라 테스트에서 참조할 수 없어 값을 복사하고 주석에 근거를 남겼다. Task 8이 상수를 바꾸면 테스트가 실패한다(의도된 감지) — 그때 **주석의 숫자도 함께 갱신**해야 한다.
   - 관련 파일: `Tests/EditMode/*.cs`(7), `Tests/EditMode/MCPTools.Editor.Tests.asmdef`, `Editor/AssemblyInfo.cs`
 
@@ -79,15 +79,16 @@
 
 - [ ] `CHANGELOG.md` `[Unreleased]`에 기록 (Task 10과 같은 파일 — 충돌 시 두 항목 모두 유지)
 
-### 커밋 보류 중 (Unity 필요)
+### Unity 검증 (완료)
 
-- [ ] **Unity 에디터를 한 번 열어 `Tests/EditMode/**`·`Editor/AssemblyInfo.cs`의 `.meta` 생성** — 생성 전에는 커밋하지 않는다. `.meta` 없이 커밋하면 사용자 프로젝트에서 GUID가 새로 생성돼 asmdef 참조가 깨지고(릴리스절차 §커밋 전 점검), Q3에서 만든 CI의 `.meta` 검사도 실패한다
-- [ ] 컴파일 오류 0 확인 후 커밋
+- [x] **Unity 에디터를 한 번 열어 `Tests/EditMode/**`·`Editor/AssemblyInfo.cs`의 `.meta` 생성** — 9개 전부 생성 확인 후 커밋. `.meta` 없이 커밋하면 사용자 프로젝트에서 GUID가 새로 생성돼 asmdef 참조가 깨지고(릴리스절차 §커밋 전 점검), Q3에서 만든 CI의 `.meta` 검사도 실패한다 → **Q3의 검사가 실제로 이 실수를 막았다**
+- [x] 컴파일 오류 0 확인 후 커밋
 
 ## 2. 에디터 테스트 체크리스트
 
-- [ ] Unity Test Runner(EditMode)에서 전체 테스트 통과
+- [x] Unity Test Runner(EditMode)에서 전체 테스트 통과 — **74/74 통과, 0.27초** (Unity 6000.5.2f1)
 - [ ] `EmptyCellContentRatio` 값을 일부러 바꾸면 시트 검출 테스트가 **실패**한다 (정답지가 실제로 동작하는지 확인)
+  - 미수행 — `SpriteSheetImporter.cs`는 터미널 B(Task 8) 영역이라 이번 병행 작업 중에는 건드리지 않았다. Task 8이 C23/C24로 알고리즘을 재작성할 때 이 테스트가 실제로 회귀를 잡는지가 자연스러운 검증이 된다
 - [ ] 빈 Unity 6 프로젝트에 git URL로 설치 → `testables` 미지정 상태에서 **컴파일 오류 0**, 테스트 어셈블리 미컴파일
 - [ ] 같은 프로젝트의 `manifest.json`에 `testables`로 `com.sungchan.mcptools`를 추가하면 Test Runner에 테스트가 나타나고 통과
 - [ ] GitHub 저장소 첫 화면에서 README가 렌더링되고 설치 URL 복사 → 설치 성공
