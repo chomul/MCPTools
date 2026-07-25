@@ -84,7 +84,9 @@
 
 ### Q5. 지원 플랫폼 명시 (문서만) — 중간
 
-**문제**: Task 7 D10(macOS/Linux 경로 정리)이 장비 부재로 보류 상태인데, 문서 어디에도 "Windows 전용"이라고 적혀 있지 않다. 실제로 Windows 전제 코드가 있다 — `ComfyUIServerLauncher.cs:653`(`taskkill /PID /T /F`), `:881`(`SystemDrive` 보정), `.gitattributes`의 `*.ps1 eol=crlf`.
+**문제**: Task 7 D10(macOS/Linux 경로 정리)이 장비 부재로 보류 상태인데, 문서 어디에도 검증 범위가 적혀 있지 않다.
+
+> 착수 중 정정(2026-07-25): 최초 조사에서 "Windows 전제 코드"라고 봤으나, 실제로는 **플랫폼 분기가 이미 있고 비Windows 경로가 미검증**인 상태다. `ComfyUIServerLauncher.cs:648`이 `#if UNITY_EDITOR_WIN`(`taskkill /PID /T /F`, 프로세스 트리 종료) / `#else`(`Process.Kill()`, 프로세스 하나만) 로 갈라지고, `:710`의 `IsWindows` 프로퍼티로 Python 탐지 후보 경로를 분기하며 Windows에서만 `SystemDrive` 루트(`:761`)를 훑는다. 따라서 "Windows 전용"이 아니라 **"Windows 검증, 그 외 미검증 + 알려진 동작 차이"** 로 기술해야 한다.
 
 **대응**: 추측 분기를 넣지 않는다(Task 7 결정 유지). 대신 **검증 범위를 명시**한다.
 

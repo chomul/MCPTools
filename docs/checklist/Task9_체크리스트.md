@@ -9,10 +9,13 @@
 
 ### Q1. 저장소 루트 README
 
-- [ ] 루트 `README.md` 생성 — 소개 / 요구 사항 / 설치 URL / 4단계+시트 흐름 표 / 상세 문서 링크
-- [ ] 패키지 README를 복제하지 않고 **링크로 연결** (이중 관리 금지)
-- [ ] 설치 URL이 현재 릴리스 태그와 일치 (`#v0.2.0`)
-- [ ] (선택) 창 스크린샷 1~2장 — `docs/images/`에 두고 참조
+- [x] 루트 `README.md` 생성 — 소개 / 요구 사항 / 설치 URL / 4단계+시트 흐름 표 / 상세 문서 링크
+- [x] 패키지 README를 복제하지 않고 **링크로 연결** (이중 관리 금지)
+- [x] 설치 URL이 현재 릴리스 태그와 일치 (`#v0.2.0`)
+- [~] (선택) 창 스크린샷 — 이미지 파일이 없어 넣지 않았다. 빈 링크를 남기지 않는 편을 택함
+  - 구현 결과: 5개 절(소개 / 요구 사항 / 설치 / 파이프라인 / 문서)로 구성. 파이프라인 표는 단계·도구(메뉴 경로 포함)·입력·출력 4열이며 4단계 + `(별도) 스프라이트 시트` 행을 담았다. 상세는 전부 패키지 README 앵커 링크로 넘겨 이중 관리를 피했다.
+  - 검증 상태: 인용 값을 원본에서 대조 완료 — 메뉴 경로 5종(`1. Asset Listup`/`2. Prompt Builder`/`3. ComfyUI Generator`/`4. Asset Applier`/`Sprite Sheet`/`Pipeline (All-in-One)`)이 실제 `[MenuItem]` 문자열과 일치, Python 3.7 이상(`ComfyUIServerLauncher.cs:44,47`의 `MinimumPythonMajor/Minor`), 버전 `0.2.0`(package.json ↔ `MCPToolsInfo.Version` ↔ 태그 `v0.2.0` 3중 일치), 설치 URL 형식(`docs/릴리스절차.md:13`). **GitHub 렌더링·링크 클릭 확인은 푸시 후 필요.**
+  - 관련 파일: `README.md`(신규)
 
 ### Q2. EditMode 테스트
 
@@ -51,9 +54,13 @@
 
 ### Q5. 지원 플랫폼 명시 (문서만)
 
-- [ ] 패키지 `README.md` 요구 사항에 "검증 플랫폼: Windows 10/11, macOS·Linux 미검증"
-- [ ] 루트 README(Q1)에도 동일 문구
-- [ ] 알려진 Windows 종속 지점을 패키지 README 문제 해결 절에 기록 (`ComfyUIServerLauncher.cs`의 `taskkill`·`SystemDrive`)
+- [x] 패키지 `README.md` 요구 사항에 "검증 플랫폼: Windows 10/11, macOS·Linux 미검증"
+- [x] 루트 README(Q1)에도 동일 문구
+- [x] 알려진 Windows 종속 지점을 패키지 README 문제 해결 절에 기록 (`ComfyUIServerLauncher.cs`의 `taskkill`·`SystemDrive`)
+  - **조사 정정**: 최초 조사에서 "Windows 전제 코드"라고 판단했으나 실제로는 **플랫폼 분기가 이미 있고 비Windows 경로가 미검증**이다. `ComfyUIServerLauncher.cs:648`이 `#if UNITY_EDITOR_WIN`(`taskkill /PID /T /F` 프로세스 트리 종료) / `#else`(`Process.Kill()` 단일 프로세스)로 갈라지고, `:710`의 `IsWindows`로 Python 탐지 후보를 분기해 Windows에서만 `SystemDrive` 루트(`:761`)를 훑는다. 따라서 문서를 "Windows 전용"이 아니라 "Windows 검증 / 그 외 미검증 + 알려진 동작 차이"로 기술했다. Task 9 문서 §Q5에도 이 정정을 기록함.
+  - 구현 결과: 패키지 README 2곳 — ① 요구 사항 절 Unity 버전 다음 줄에 검증 플랫폼 한 줄(+ 문제 해결 앵커 링크), ② 문제 해결 절 마지막에 "macOS·Linux에서 쓸 때 (미검증)" 항목과 하위 2개(브리지 종료 시 자식 python 잔존 가능 → 콘솔 종료 또는 OS 무관한 [원격 종료], Python 자동 탐지 경로 차이 → 설정에 절대 경로 지정). 추측성 해결책은 넣지 않고 "동작을 보장하지 않습니다"를 명시.
+  - 검증 상태: 근거 줄 번호를 실제 파일에서 재확인(`:648`, `:710`, `:761`). 문서 diff 검토 완료.
+  - 관련 파일: `MCPToolTest/Assets/MCPTools/README.md`, `README.md`, `docs/tasks/Task9_품질기반.md`
 
 ### 마무리
 
