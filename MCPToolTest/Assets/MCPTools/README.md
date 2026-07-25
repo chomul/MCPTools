@@ -18,7 +18,7 @@
 1. **(해당하는 경우) 기존 설치본 삭제** — 예전에 `Assets/` 아래에 `MCPTools` 폴더를 직접 넣어 쓰던 프로젝트는 **패키지를 추가하기 전에** 그 폴더를 지웁니다. → [설치](#설치)
 2. **패키지 설치** — `Window > Package Manager`의 좌측 상단 **[+] > Add package from git URL**에 아래 URL을 입력합니다. 사용자 PC에 `git`이 설치되어 있어야 합니다. → [설치](#설치)
    ```
-   https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.1.0
+   https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.2.0
    ```
 3. **컴파일·메뉴 확인** — 콘솔에 컴파일 오류가 없고 `Tools/MCP/*` 메뉴가 보이는지 확인합니다.
 4. **(3단계를 쓸 때) ComfyUI 준비** — ComfyUI를 실행하고, 워크플로가 요구하는 모델 파일과 커스텀 노드(ComfyUI-Inspyrenet-Rembg, ComfySwitchNode)를 설치합니다. → [요구 사항](#요구-사항)
@@ -61,7 +61,7 @@
 이 도구는 **GitHub + Unity Package Manager(UPM, git URL)** 로 배포합니다. zip·`.unitypackage` 배포는 하지 않습니다.
 
 - 저장소: <https://github.com/chomul/MCPTools>
-- 패키지 이름: `com.sungchan.mcptools` (현재 버전 `0.1.0`)
+- 패키지 이름: `com.sungchan.mcptools` (현재 버전 `0.2.0`)
 
 > ⚠️ **기존 설치본이 있다면 먼저 삭제하세요.** 예전에 `Assets/` 아래에 `MCPTools` 폴더를 직접 넣어 쓰던 프로젝트는 **패키지를 추가하기 전에 그 폴더를 반드시 삭제**해야 합니다. 남겨두면 어셈블리 이름이 중복되어 `Assembly with name 'MCPTools.Editor' already exists` 컴파일 오류가 나고, `.meta` GUID·설정 에셋도 두 벌이 됩니다.
 > **`Assets/MCPTools.User/`는 사용자 데이터(설정 에셋·프롬프트 템플릿·워크플로 사본)이므로 지우면 안 됩니다.** 지울 대상은 도구 본체가 들어 있던 `MCPTools` 폴더뿐입니다.
@@ -73,7 +73,7 @@
 3. 아래 URL을 붙여넣고 [Install]/[Add]를 누릅니다.
 
    ```
-   https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.1.0
+   https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.2.0
    ```
 
 4. 설치가 끝나면 컴파일 오류 없이 `Tools/MCP/*` 메뉴가 나타납니다.
@@ -82,7 +82,7 @@
 
 ### 2) 버전 고정과 업데이트
 
-- URL 끝의 **`#v0.1.0`은 git 태그**입니다. 태그를 붙이면 해당 버전으로 **고정**되어 팀원 모두가 같은 버전을 받습니다.
+- URL 끝의 **`#v0.2.0`은 git 태그**입니다. 태그를 붙이면 해당 버전으로 **고정**되어 팀원 모두가 같은 버전을 받습니다.
 - 태그를 **생략하면 기본 브랜치의 HEAD**를 받으므로, 설치 시점에 따라 서로 다른 버전이 될 수 있습니다. 팀 프로젝트에서는 태그를 붙이는 것을 권장합니다.
 - 업데이트하려면 프로젝트의 `Packages/manifest.json`에서 이 패키지의 URL 태그를 새 버전으로 바꾸거나(예: `#v0.1.0` → `#v0.2.0`), Package Manager에서 **패키지를 제거한 뒤 새 URL로 다시 추가**합니다. 변경 이력은 [CHANGELOG.md](CHANGELOG.md)를 참고하세요.
 - 패키지를 제거·재설치해도 `Assets/MCPTools.User/`의 설정·템플릿·워크플로 사본과 `Assets/Docs`·`Assets/Generated`의 산출물은 그대로 남습니다.
@@ -602,7 +602,7 @@ UPM으로 설치한 패키지 폴더(`Packages/...`)는 **읽기 전용**입니�
 
 ## 버전과 라이선스
 
-- 현재 버전: **0.1.0** (패키지 이름 `com.sungchan.mcptools`)
+- 현재 버전: **0.2.0** (패키지 이름 `com.sungchan.mcptools`)
 - 변경 이력: [CHANGELOG.md](CHANGELOG.md) — [Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식, [Semantic Versioning](https://semver.org/lang/ko/)을 따릅니다.
 - 라이선스: **MIT** — 전문은 [LICENSE.md](LICENSE.md)를 참고하세요.
 - 저장소·이슈: <https://github.com/chomul/MCPTools>
