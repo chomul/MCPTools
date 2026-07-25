@@ -14,7 +14,7 @@
 - [x] 설치 URL이 현재 릴리스 태그와 일치 (`#v0.2.0`)
 - [~] (선택) 창 스크린샷 — 이미지 파일이 없어 넣지 않았다. 빈 링크를 남기지 않는 편을 택함
   - 구현 결과: 5개 절(소개 / 요구 사항 / 설치 / 파이프라인 / 문서)로 구성. 파이프라인 표는 단계·도구(메뉴 경로 포함)·입력·출력 4열이며 4단계 + `(별도) 스프라이트 시트` 행을 담았다. 상세는 전부 패키지 README 앵커 링크로 넘겨 이중 관리를 피했다.
-  - 검증 상태: 인용 값을 원본에서 대조 완료 — 메뉴 경로 5종(`1. Asset Listup`/`2. Prompt Builder`/`3. ComfyUI Generator`/`4. Asset Applier`/`Sprite Sheet`/`Pipeline (All-in-One)`)이 실제 `[MenuItem]` 문자열과 일치, Python 3.7 이상(`ComfyUIServerLauncher.cs:44,47`의 `MinimumPythonMajor/Minor`), 버전 `0.2.0`(package.json ↔ `MCPToolsInfo.Version` ↔ 태그 `v0.2.0` 3중 일치), 설치 URL 형식(`docs/릴리스절차.md:13`). **GitHub 렌더링·링크 클릭 확인은 푸시 후 필요.**
+  - 검증 상태: 인용 값을 원본에서 대조 완료 — 메뉴 경로 5종(`1. Asset Listup`/`2. Prompt Builder`/`3. ComfyUI Generator`/`4. Asset Applier`/`Sprite Sheet`/`Pipeline (All-in-One)`)이 실제 `[MenuItem]` 문자열과 일치, Python 3.7 이상(`ComfyUIServerLauncher.cs:44,47`의 `MinimumPythonMajor/Minor`), 버전 `0.2.0`(package.json ↔ `MCPToolsInfo.Version` ↔ 태그 `v0.2.0` 3중 일치), 설치 URL 형식(`docs/릴리스절차.md:13`). **✅ 푸시 후 확인 완료(`b1a5bc3`)** — GitHub API로 루트 README가 렌더링됨(5,056B, 제목·설치 URL·검증 플랫폼 문구 포함), 링크 대상 3종(패키지 README/CHANGELOG/LICENSE) 전부 HTTP 200, 앵커 대상 헤딩(`## 요구 사항`·`## 문제 해결`·`## 빠른 시작`)이 패키지 README에 실재함을 확인.
   - 관련 파일: `README.md`(신규)
 
 ### Q2. EditMode 테스트
@@ -51,7 +51,7 @@
   - **절대 경로 스캔 오탐 회피**: 순진한 `C:\` grep은 정상 코드를 잡는다(`ComfyUIServerLauncher.cs:167`의 사용자 안내 예시 `C:\Unity\<프로젝트명>`, `:881`의 `"C:"` 설명 주석). 주석을 제외하는 대신(주석에 박힌 개인 경로도 유출이므로) **드라이브 문자 + 홈/설치 성격 세그먼트**(`Users`/`Program Files`/`ProgramData`/`Projects` 등)가 이어질 때만 매치하도록 패턴을 좁혔다. POSIX는 `/home/<이름>/`·`/Users/<이름>/`만 본다.
   - **`python3` 폴백**: Windows Git Bash의 `python3`는 Microsoft Store 스텁이라 실행되지 않는다. `_lib.sh`가 `python3 → python → py` 순으로 실제 Python 3를 탐지해 CI와 로컬 양쪽에서 동작한다.
   - 통합 시 정리: 서브에이전트가 만든 `.github/.gitattributes`를 삭제하고 **루트 `.gitattributes`에 `*.sh text eol=lf`를 추가**했다(Task 7이 세운 단일 `.gitattributes` 규약 유지, `*.yml`은 이미 루트에 있음).
-  - 검증 상태: **현재 HEAD에서 6개 전부 PASS(주 에이전트가 독립 재실행해 확인)**. 실패 경로도 확인 — 태그 불일치(`v9.9.9`) 시 `FAIL [버전 3중 동기] 태그(v9.9.9) 와 package.json(0.2.0)…` 한 줄로 종료(exit 1). 서브에이전트가 격리 픽스처 저장소에서 `.meta` 삭제 / JSON 파손 / `Server~` 미추적 / 문법 오류 / `MCPToolSettings.asset` 커밋 / 절대 경로 유출 시뮬레이션을 수행해 전부 검출을 확인했고, 오탐 대조군 4종은 통과했다. **GitHub Actions 실제 실행 확인은 푸시 후 필요.**
+  - 검증 상태: **현재 HEAD에서 6개 전부 PASS(주 에이전트가 독립 재실행해 확인)**. 실패 경로도 확인 — 태그 불일치(`v9.9.9`) 시 `FAIL [버전 3중 동기] 태그(v9.9.9) 와 package.json(0.2.0)…` 한 줄로 종료(exit 1). 서브에이전트가 격리 픽스처 저장소에서 `.meta` 삭제 / JSON 파손 / `Server~` 미추적 / 문법 오류 / `MCPToolSettings.asset` 커밋 / 절대 경로 유출 시뮬레이션을 수행해 전부 검출을 확인했고, 오탐 대조군 4종은 통과했다. **✅ 푸시 후 실제 실행 확인 완료** — 실행 [30166612571](https://github.com/chomul/MCPTools/actions/runs/30166612571)(`b1a5bc3`)에서 job `릴리스 사전 점검`이 `success`, **6개 점검 step이 전부 실행되어 success**(조용히 건너뛴 step 없음). ubuntu 러너에서 `.sh` 줄바꿈·`setup-python`·`GITHUB_STEP_SUMMARY`가 정상 동작함을 확인.
   - 관련 파일: `.github/workflows/ci.yml`, `.github/scripts/*.sh`(7개), `.gitattributes`
 
 ### Q4. Task 8 S1 계획 정정 (문서만)
@@ -91,6 +91,6 @@
   - 미수행 — `SpriteSheetImporter.cs`는 터미널 B(Task 8) 영역이라 이번 병행 작업 중에는 건드리지 않았다. Task 8이 C23/C24로 알고리즘을 재작성할 때 이 테스트가 실제로 회귀를 잡는지가 자연스러운 검증이 된다
 - [ ] 빈 Unity 6 프로젝트에 git URL로 설치 → `testables` 미지정 상태에서 **컴파일 오류 0**, 테스트 어셈블리 미컴파일
 - [ ] 같은 프로젝트의 `manifest.json`에 `testables`로 `com.sungchan.mcptools`를 추가하면 Test Runner에 테스트가 나타나고 통과
-- [ ] GitHub 저장소 첫 화면에서 README가 렌더링되고 설치 URL 복사 → 설치 성공
-- [ ] `MCPToolsInfo.Version`만 올린 브랜치를 push하면 CI가 버전 불일치로 실패
+- [x] GitHub 저장소 첫 화면에서 README가 렌더링되고 링크 3종이 살아 있음 — API로 확인. **빈 프로젝트에 설치 URL로 실제 설치하는 검증은 미수행**(별도 Unity 프로젝트 필요, 릴리스 시 `docs/릴리스절차.md` §설치 검증에서 수행)
+- [~] `MCPToolsInfo.Version`만 올린 브랜치를 push하면 CI가 버전 불일치로 실패 — 원격 push로는 미수행. 대신 **로컬에서 같은 스크립트에 불일치 값을 주입해 exit 1과 한 줄 사유를 확인**했고(주 에이전트), 서브에이전트가 격리 픽스처 저장소에서 실제 파일을 고쳐 재현했다. 원격 실패 경로를 남기려고 일부러 깨진 커밋을 push하지는 않았다
 - [ ] `.meta` 하나를 지운 브랜치를 push하면 CI가 실패
