@@ -320,14 +320,22 @@ Task 문서가 우려한 "한쪽 변경이 유실될 수 있다"는 **재현되�
 
 **남은 사람 확인 항목** (자동 확인이 불가능하거나 공유 자원이 필요한 것)
 
-- [ ] 없는 커스텀 노드 워크플로로 `mcptools_generate_candidates` → 다이얼로그 없이 Job `failed` + **누락 노드·조치**가 메시지에 담김
-      — 위에서 확인한 것은 브리지 미기동 경로다. **preflight 분기 자체**는 브리지 + ComfyUI가 떠 있어야 탈 수 있다 (브리지는 터미널 간 공유 자원이라 기동하지 않았다).
-- [ ] 같은 상황에서 `mcptools_run_pipeline` → `failed`에 같은 안내 (스레드 위반 예외 아님) — 위와 같은 이유
-- [ ] 창에서 같은 상황 → 기존처럼 다이얼로그로 안내 (대화형 경로 회귀 없음) — 위와 같은 이유 + 사람의 창 조작 필요
+- [x] **preflight 실패 시 다이얼로그 없이 Job `failed` + 원인·조치** — **2026-07-26 브리지 0.4.0 + ComfyUI 기동 상태에서 실측(주 에이전트)**. 누락 커스텀 노드는 이 환경에 없어(`/workflows`의 `missingNodes` 전 워크플로 빈 배열) **잘못된 `ckpt_name`을 기본값으로 가진 임시 워크플로**(`MCPTools.User/ComfyUI/workflows/PreflightTest.json`)를 만들어 `invalidInputs` 분기를 탔다. `mcptools_generate_candidates`가 즉시 `started`를 반환하고 **에디터가 잠기지 않았으며**(모달이 떴다면 호출이 블로킹됨), `mcptools_list_candidates`가 `failed`와 함께 아래 메시지를 반환:
+  > 워크플로 "PreflightTest"를 현재 ComfyUI 환경에서 실행할 수 없어 생성을 중단했습니다. / ■ ComfyUI에 없는 파일/값 1건 / - 노드 #1 (CheckpointLoaderSimple) ckpt_name = "NO_SUCH_MODEL_xyz.safetensors" / 설치된 값 예시: … / → 3단계 창의 변수 UI에서 …
+
+  후보 폴더에 파일이 생성되지 않은 것도 확인. 시험 후 임시 워크플로 삭제.
+- [~] 같은 상황에서 `mcptools_run_pipeline` → `failed`에 같은 안내 — **미수행**. 같은 `GenerateAsync(interactive:false)` 경로를 공유하고 호출부가 `interactive: false`인 것은 코드로 확인했으나, 파이프라인 전체 실행은 항목 수 × 약 120초라 이번에 돌리지 않았다.
+- [ ] 창에서 같은 상황 → 기존처럼 다이얼로그로 안내 (대화형 경로 회귀 없음) — 사람의 창 조작 필요
 - [ ] 창 버튼 비활성 + 사유 표시 (Play Mode 진입 시 노란 HelpBox, 생성/확정/적용/스캔/저장 버튼 회색) — GUI 표시라 사람 눈 확인 필요
 - [ ] 창에서 항목 적용 → 창을 닫았다 다시 열면 "적용됨" 유지, [일괄 적용] 대상에서 제외, 개별 [적용]은 가능, "이미 적용됨 N개" 표시 — 코드 경로는 위에서 확인했고 GUI 표시만 남음
 - [ ] 통합 창에서 [Sprite Sheet 창 열기] 동작 — GUI 확인
-- [ ] **회귀**: 3단계 생성 → 확정 → 4단계 적용 전체 흐름 (브리지 + ComfyUI 필요)
+- [x] **회귀: 3단계 생성 → 확정 → 4단계 적용 전체 흐름** — **2026-07-26 실측(주 에이전트, MCP 경로)**
+  - 생성: `item_001`을 연속 3회 생성(각 약 120초, 후보 png 정상 생성)
+  - 확정: `mcptools_select_candidate`(`item_009`) → `Assets/Generated/3_Confirmed/Images/item_009.png` 생성
+  - 적용: `mcptools_apply_asset` → `LaserBeam.prefab`의 `m_Sprite` GUID가 확정본 `.meta`의 GUID(`5a9b45d0513aba546938fcc37c3ad03a`)와 **일치**. 반환 `data`에 `prefabPath`·`objectPath`·`appliedAssetPath`·`linkedControllerPath` 정상
+  - **R3 적용 이력 확인**: `GenerationResults.json`의 `applications` 배열에 1건 기록(`assetItemId`·대상 경로·`appliedAssetPath`·`appliedAt`)
+  - **R6 확인**: 같은 문서에 `schemaVersion: 1` 존재. 다만 §R6 구현 결과에 적힌 "최상위 **첫 키**로 기록"과 달리 기존 문서를 갱신하는 경로에서는 **마지막 키**로 붙는다(JSON 키 순서는 파싱에 무관하므로 기능 영향 없음, 서술만 부정확)
+  - **R7 부수 확인**: 브리지 `POST /free`를 본문 없이 호출하니 `Content-Length 헤더가 필요합니다`로 거부 → 입력 상한·본문 검증이 실제로 동작
 
 ## 3. 이번 Task에서 하지 않은 것
 

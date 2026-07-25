@@ -232,10 +232,21 @@ namespace MCPTools.Editor
             [ToolParameter("워크플로 이름 (GenerateImage | GenerateImageFlux | UI | StyleChange | Audio). 생략하면 항목 종류별 기본 워크플로를 사용합니다.", Required = false)]
             public string workflowName { get; set; }
 
-            /// <summary>워크플로 노드 inputs에 덮어쓸 변수 맵.</summary>
+            /// <summary>
+            /// 워크플로 노드 inputs에 덮어쓸 변수 맵.
+            /// <para>
+            /// <b>타입 주의</b>: 여기를 <c>JObject</c>로 선언하면 MCP for Unity의 스키마 생성기가
+            /// <c>JObject</c>의 <c>IEnumerable&lt;JToken&gt;</c> 구현을 보고 JSON 스키마를 <c>array</c>로 만들어,
+            /// 클라이언트가 객체를 넘길 때 "Input should be a valid list"로 거부한다
+            /// (= 이 파라미터를 MCP 경로에서 아예 쓸 수 없게 된다). 반드시 사전 타입으로 선언한다.
+            /// 이 클래스는 스키마 생성용 리플렉션 대상일 뿐이고 실제 값은
+            /// <see cref="McpToolsGenerateCandidatesTool.HandleCommand"/>가 받은 <c>JObject</c>를 그대로
+            /// 문자열화해 전달하므로, 타입 변경은 런타임 동작에 영향이 없다.
+            /// </para>
+            /// </summary>
             [ToolParameter("워크플로 변수 덮어쓰기 객체 ({\"nodeId.field\": 값}, 예: {\"5.steps\": 20, \"6.width\": 512}). " +
                            "사용 가능한 변수는 브리지 서버 variables.json 매니페스트를 따릅니다.", Required = false)]
-            public JObject variables { get; set; }
+            public Dictionary<string, object> variables { get; set; }
 
             /// <summary>기준 시드.</summary>
             [ToolParameter("기준 시드. 생략하면 무작위로 생성합니다.", Required = false)]
