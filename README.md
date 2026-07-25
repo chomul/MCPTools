@@ -2,7 +2,7 @@
 
 기획서(디자인 문서)를 입력으로 게임 에셋(이미지·UI·사운드)을 만들어 Unity 프리팹과 uGUI에 자동 적용하는 **4단계 파이프라인**(AssetListup → PromptBuilder → ComfyUIGenerator → AssetApplier)을 Unity Editor Tool + MCP 도구로 제공하는 UPM 패키지입니다. 이미지·사운드는 **로컬 ComfyUI**로 생성해 항목마다 후보 4개를 보여주고, 사용자가 고른 결과물만 대상 프리팹/UI 컴포넌트에 적용합니다. 분석·작성 지능은 사용자가 쓰는 AI(MCP 클라이언트, 로컬 AI CLI, 웹 AI)에 위임하는 **AI 중립** 설계라, 도구 자체는 재료 수집(scan)과 결과 검증·저장(save)만 담당합니다.
 
-- 패키지 이름: `com.sungchan.mcptools` (현재 버전 **0.2.0**)
+- 패키지 이름: `com.sungchan.mcptools` (현재 버전 **0.3.0**)
 - 상세 문서: **[패키지 README](MCPToolTest/Assets/MCPTools/README.md)** (설치부터 단계별 사용법·MCP 도구 레퍼런스까지)
 
 ## 요구 사항
@@ -21,10 +21,10 @@
 Unity 6에서 **`Window > Package Manager` → 좌측 상단 [+] → `Install package from git URL...`** 에 아래 URL을 붙여넣습니다.
 
 ```
-https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.2.0
+https://github.com/chomul/MCPTools.git?path=MCPToolTest/Assets/MCPTools#v0.3.0
 ```
 
-- 끝의 `#v0.2.0`은 git 태그라 버전이 고정됩니다. 생략하면 기본 브랜치 HEAD를 받습니다.
+- 끝의 `#v0.3.0`은 git 태그라 버전이 고정됩니다. 생략하면 기본 브랜치 HEAD를 받습니다.
 - 예전에 `Assets/` 아래에 `MCPTools` 폴더를 직접 넣어 쓰던 프로젝트는 **패키지를 추가하기 전에 그 폴더를 삭제**해야 어셈블리 이름 충돌이 나지 않습니다.
 - 설치 후 흐름은 패키지 README의 [빠른 시작 체크리스트](MCPToolTest/Assets/MCPTools/README.md#빠른-시작-첫-실행-체크리스트)를 순서대로 따라가면 첫 생성까지 도달합니다.
 
