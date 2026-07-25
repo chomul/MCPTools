@@ -161,18 +161,23 @@ namespace MCPTools.Editor
                 // AI 도구 선택 + 옵션
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    _selectedAiIndex = EditorGUILayout.Popup("AI 도구",
+                    // 선택이 실제로 바뀐 경우에만 EditorPrefs에 쓴다.
+                    // (무조건 쓰면 리페인트마다 Windows 레지스트리 쓰기가 발생한다 — Task 8 C3)
+                    int newAiIndex = EditorGUILayout.Popup("AI 도구",
                         Mathf.Clamp(_selectedAiIndex, 0, Mathf.Max(0, _aiOptions.Length - 1)), _aiOptions);
+                    if (newAiIndex != _selectedAiIndex)
+                    {
+                        _selectedAiIndex = newAiIndex;
+                        if (_selectedAiIndex >= 0 && _selectedAiIndex < _aiOptions.Length)
+                        {
+                            EditorPrefs.SetString(PrefKeySelectedAi, _aiOptions[_selectedAiIndex]);
+                        }
+                    }
 
                     if (GUILayout.Button("다시 검색", GUILayout.Width(SmallButtonWidth)))
                     {
                         RefreshAiToolList(true);
                     }
-                }
-
-                if (_selectedAiIndex >= 0 && _selectedAiIndex < _aiOptions.Length)
-                {
-                    EditorPrefs.SetString(PrefKeySelectedAi, _aiOptions[_selectedAiIndex]);
                 }
 
                 bool isCustom = SelectedAiOption() == CustomOption;
@@ -634,6 +639,13 @@ namespace MCPTools.Editor
             string saved = EditorPrefs.GetString(PrefKeySelectedAi, string.Empty);
             int savedIndex = System.Array.IndexOf(_aiOptions, saved);
             _selectedAiIndex = savedIndex >= 0 ? savedIndex : 0;
+
+            // 저장된 도구가 더 이상 목록에 없으면 실제로 표시되는 값으로 1회 보정한다.
+            // (기존에는 리페인트마다 쓰기가 이 보정을 대신했다 — Task 8 C3)
+            if (savedIndex < 0 && _aiOptions.Length > 0)
+            {
+                EditorPrefs.SetString(PrefKeySelectedAi, _aiOptions[_selectedAiIndex]);
+            }
 
             // AI CLI가 하나도 감지되지 않으면 수동 방식 Foldout을 자동으로 펼친다.
             if (_aiTools.Count == 0 && !_manualFoldout)

@@ -47,6 +47,41 @@ namespace MCPTools.Editor
         private const string RawImageTextureProperty = "m_Texture";
 
         /// <summary>
+        /// 수집 대상 컴포넌트 종류입니다. 한 컴포넌트가 여러 종류에 동시에 해당할 수 있으므로
+        /// (예: 이름이 "Image"이면서 SpriteRenderer를 상속한 사용자 타입) 비트 플래그로 다룹니다.
+        /// </summary>
+        [Flags]
+        private enum SlotKind
+        {
+            None = 0,
+            Image = 1 << 0,
+            RawImage = 1 << 1,
+            SpriteRenderer = 1 << 2,
+            AudioSource = 1 << 3
+        }
+
+        /// <summary>
+        /// 컴포넌트 타입별 판정 결과 캐시입니다. 타입당 1회만 상속 체인을 순회하면 되므로
+        /// 프리팹이 수천 개여도 판정 비용이 (컴포넌트 수)가 아니라 (고유 타입 수)에 비례합니다.
+        /// 정적 캐시가 <see cref="Type"/> 객체를 붙잡지만, 도메인 리로드마다 정적 필드가 통째로
+        /// 초기화되므로 누수가 아닙니다(타입 자체도 도메인과 수명을 같이 합니다).
+        /// </summary>
+        private static readonly Dictionary<Type, SlotKind> SlotKindCache = new Dictionary<Type, SlotKind>();
+
+        /// <summary>
+        /// 계층을 1회만 순회하면서도 슬롯 순서를 기존(Image 전체 → RawImage 전체 → SpriteRenderer 전체
+        /// → AudioSource 전체)과 동일하게 유지하기 위한 종류별 임시 버퍼입니다.
+        /// 스캔은 메인 스레드에서 순차 실행되고 재진입이 없으므로 할당을 줄이기 위해 재사용합니다.
+        /// </summary>
+        private static readonly List<ScanEntry> RawImageBuffer = new List<ScanEntry>();
+
+        /// <inheritdoc cref="RawImageBuffer"/>
+        private static readonly List<ScanEntry> SpriteRendererBuffer = new List<ScanEntry>();
+
+        /// <inheritdoc cref="RawImageBuffer"/>
+        private static readonly List<ScanEntry> AudioSourceBuffer = new List<ScanEntry>();
+
+        /// <summary>
         /// rootPath 아래의 모든 프리팹에서 Image/RawImage/SpriteRenderer/AudioSource 슬롯을 수집합니다.
         /// </summary>
         /// <param name="rootPath">스캔 루트 폴더 (Assets/ 기준 상대 경로, 예: "Assets").</param>
@@ -235,151 +270,166 @@ namespace MCPTools.Editor
             return results;
         }
 
+        /// <summary>
+        /// 씬의 루트 오브젝트별로 슬롯을 수집합니다 (루트 단위로 종류별 순서가 유지되던 기존 동작을 그대로 따릅니다).
+        /// </summary>
         private static void CollectSceneSlots(Scene scene, string scenePath, List<ScanEntry> results)
         {
             foreach (GameObject root in scene.GetRootGameObjects())
             {
-                CollectUISceneSlots(root, scenePath, "Image", ImageSpriteProperty, results);
-                CollectUISceneSlots(root, scenePath, "RawImage", RawImageTextureProperty, results);
-                CollectComponentSlots<SpriteRenderer>(root, scenePath, "SpriteRenderer", results,
-                    renderer => renderer.sprite != null ? renderer.sprite.name : string.Empty, false);
-                CollectComponentSlots<AudioSource>(root, scenePath, "AudioSource", results,
-                    audio => audio.clip != null ? audio.clip.name : string.Empty, false);
+                CollectSlotsCore(root, scenePath, null, true, results);
             }
         }
 
-        private static void CollectComponentSlots<T>(
-            GameObject root, string scenePath, string componentType, List<ScanEntry> results,
-            Func<T, string> currentAssetName, bool isUI) where T : Component
+        /// <summary>프리팹 1개의 슬롯을 수집합니다.</summary>
+        private static void CollectSlots(GameObject prefab, string prefabPath, List<ScanEntry> results)
         {
-            foreach (T component in root.GetComponentsInChildren<T>(true))
-            {
-                // 프리팹 인스턴스 소속 오브젝트는 원본 프리팹 스캔으로 커버되므로 제외한다.
-                if (PrefabUtility.IsPartOfPrefabInstance(component.gameObject))
-                {
-                    continue;
-                }
-
-                results.Add(new ScanEntry
-                {
-                    scenePath = scenePath,
-                    objectPath = GetHierarchyPath(component.transform, null),
-                    componentType = componentType,
-                    currentAssetName = currentAssetName(component),
-                    isUI = isUI
-                });
-            }
+            CollectSlotsCore(prefab, prefabPath, prefab.transform, false, results);
         }
 
         /// <summary>
-        /// 씬 오브젝트에서 uGUI 컴포넌트(Image/RawImage) 슬롯을 수집합니다.
-        /// uGUI 어셈블리를 참조하지 않기 위해 타입 이름으로 컴포넌트를 판정하고,
+        /// 계층을 <b>1회만</b> 순회하며 Image/RawImage/SpriteRenderer/AudioSource 슬롯을 모두 수집합니다
+        /// (기존에는 종류별로 4번 순회했고 그중 2번은 전 컴포넌트 배열을 따로 할당했습니다).
+        /// uGUI 어셈블리를 참조하지 않기 위해 Image/RawImage는 타입 이름(상속 체인 포함)으로 판정하고,
         /// 현재 참조 중인 에셋 이름은 SerializedProperty로 읽습니다.
+        /// 순회는 1회지만, 결과는 종류별 임시 버퍼를 거쳐 <b>Image → RawImage → SpriteRenderer → AudioSource</b>
+        /// 순으로 이어붙이므로 슬롯 순서·내용이 개선 전과 완전히 동일합니다
+        /// (1단계 목록 항목 순서와 자동 부여 id가 이 순서에 의존합니다).
         /// </summary>
-        private static void CollectUISceneSlots(
-            GameObject root, string scenePath, string componentType, string propertyPath, List<ScanEntry> results)
+        /// <param name="root">순회 시작 오브젝트 (프리팹 루트 또는 씬 루트 오브젝트).</param>
+        /// <param name="assetPath">프리팹 경로 또는 씬 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="pathRoot">계층 경로 계산 기준 (프리팹은 프리팹 루트, 씬은 null).</param>
+        /// <param name="sceneMode">true면 씬 스캔 — scenePath를 채우고 프리팹 인스턴스 소속 오브젝트를 제외합니다.</param>
+        /// <param name="results">수집 결과를 담을 목록.</param>
+        private static void CollectSlotsCore(
+            GameObject root, string assetPath, Transform pathRoot, bool sceneMode, List<ScanEntry> results)
         {
+            string prefabPath = sceneMode ? string.Empty : assetPath;
+            string scenePath = sceneMode ? assetPath : string.Empty;
+
+            RawImageBuffer.Clear();
+            SpriteRendererBuffer.Clear();
+            AudioSourceBuffer.Clear();
+
             foreach (Component component in root.GetComponentsInChildren<Component>(true))
             {
-                if (!IsComponentOfType(component, componentType))
+                if (component == null)
+                {
+                    continue; // 스크립트가 없는(Missing) 컴포넌트
+                }
+
+                SlotKind kind = GetSlotKind(component.GetType());
+                if (kind == SlotKind.None)
                 {
                     continue;
                 }
 
                 // 프리팹 인스턴스 소속 오브젝트는 원본 프리팹 스캔으로 커버되므로 제외한다.
-                if (PrefabUtility.IsPartOfPrefabInstance(component.gameObject))
+                if (sceneMode && PrefabUtility.IsPartOfPrefabInstance(component.gameObject))
                 {
                     continue;
                 }
 
-                results.Add(new ScanEntry
-                {
-                    scenePath = scenePath,
-                    objectPath = GetHierarchyPath(component.transform, null),
-                    componentType = componentType,
-                    currentAssetName = GetReferencedAssetName(component, propertyPath),
-                    isUI = true
-                });
-            }
-        }
+                string objectPath = GetHierarchyPath(component.transform, pathRoot);
 
-        /// <summary>
-        /// 프리팹에서 uGUI 컴포넌트(Image/RawImage) 슬롯을 수집합니다 (판정·값 조회 방식은 씬과 동일).
-        /// </summary>
-        private static void CollectUIPrefabSlots(
-            GameObject prefab, string prefabPath, string componentType, string propertyPath, List<ScanEntry> results)
-        {
-            foreach (Component component in prefab.GetComponentsInChildren<Component>(true))
-            {
-                if (!IsComponentOfType(component, componentType))
+                // Image는 기존 순서상 항상 가장 먼저이므로 버퍼를 거치지 않고 바로 담는다.
+                if ((kind & SlotKind.Image) != 0)
                 {
-                    continue;
+                    results.Add(MakeEntry(prefabPath, scenePath, objectPath, "Image",
+                        GetReferencedAssetName(component, ImageSpriteProperty), true));
                 }
 
-                results.Add(MakeEntry(prefabPath, component.transform, prefab.transform, componentType,
-                    GetReferencedAssetName(component, propertyPath), true));
-            }
-        }
-
-        /// <summary>
-        /// 컴포넌트가 지정한 이름의 타입이거나 그 파생 타입인지 판정합니다.
-        /// (uGUI 어셈블리 참조 없이 타입 이름으로 판정하되, GetComponentsInChildren&lt;Image&gt;와 동일하게
-        /// 사용자 정의 파생 클래스도 잡도록 기반 타입을 거슬러 올라갑니다.)
-        /// </summary>
-        private static bool IsComponentOfType(Component component, string typeName)
-        {
-            if (component == null)
-            {
-                return false; // 스크립트가 없는(Missing) 컴포넌트
-            }
-
-            for (Type type = component.GetType(); type != null; type = type.BaseType)
-            {
-                if (string.Equals(type.Name, typeName, StringComparison.Ordinal))
+                if ((kind & SlotKind.RawImage) != 0)
                 {
-                    return true;
+                    RawImageBuffer.Add(MakeEntry(prefabPath, scenePath, objectPath, "RawImage",
+                        GetReferencedAssetName(component, RawImageTextureProperty), true));
+                }
+
+                if ((kind & SlotKind.SpriteRenderer) != 0)
+                {
+                    var renderer = (SpriteRenderer)component;
+                    SpriteRendererBuffer.Add(MakeEntry(prefabPath, scenePath, objectPath, "SpriteRenderer",
+                        renderer.sprite != null ? renderer.sprite.name : string.Empty, false));
+                }
+
+                if ((kind & SlotKind.AudioSource) != 0)
+                {
+                    var audio = (AudioSource)component;
+                    AudioSourceBuffer.Add(MakeEntry(prefabPath, scenePath, objectPath, "AudioSource",
+                        audio.clip != null ? audio.clip.name : string.Empty, false));
                 }
             }
 
-            return false;
+            results.AddRange(RawImageBuffer);
+            results.AddRange(SpriteRendererBuffer);
+            results.AddRange(AudioSourceBuffer);
+        }
+
+        /// <summary>
+        /// 컴포넌트 타입이 어떤 슬롯 종류에 해당하는지 판정합니다 (타입당 1회만 계산해 캐시).
+        /// Image/RawImage는 uGUI 어셈블리 참조 없이 타입 이름으로 판정하되,
+        /// <c>GetComponentsInChildren&lt;Image&gt;</c>와 동일하게 사용자 정의 파생 클래스도 잡도록
+        /// 기반 타입 이름을 거슬러 올라갑니다(개선 전 <c>IsComponentOfType</c>과 동일한 규칙).
+        /// SpriteRenderer/AudioSource는 개선 전 <c>GetComponentsInChildren&lt;T&gt;</c>와 동일하게
+        /// 대입 가능 여부로 판정합니다.
+        /// </summary>
+        private static SlotKind GetSlotKind(Type type)
+        {
+            if (SlotKindCache.TryGetValue(type, out SlotKind cached))
+            {
+                return cached;
+            }
+
+            SlotKind kind = SlotKind.None;
+            for (Type current = type; current != null; current = current.BaseType)
+            {
+                if (string.Equals(current.Name, "Image", StringComparison.Ordinal))
+                {
+                    kind |= SlotKind.Image;
+                }
+
+                if (string.Equals(current.Name, "RawImage", StringComparison.Ordinal))
+                {
+                    kind |= SlotKind.RawImage;
+                }
+            }
+
+            if (typeof(SpriteRenderer).IsAssignableFrom(type))
+            {
+                kind |= SlotKind.SpriteRenderer;
+            }
+
+            if (typeof(AudioSource).IsAssignableFrom(type))
+            {
+                kind |= SlotKind.AudioSource;
+            }
+
+            SlotKindCache[type] = kind;
+            return kind;
         }
 
         /// <summary>
         /// SerializedProperty로 컴포넌트가 참조 중인 에셋 이름을 읽습니다 (없으면 빈 문자열).
+        /// SerializedObject는 네이티브 메모리를 잡으므로 반드시 사용 후 해제한다.
         /// </summary>
         private static string GetReferencedAssetName(Component component, string propertyPath)
         {
-            var serialized = new SerializedObject(component);
-            SerializedProperty property = serialized.FindProperty(propertyPath);
-            UnityEngine.Object value = property != null ? property.objectReferenceValue : null;
-            return value != null ? value.name : string.Empty;
-        }
-
-        private static void CollectSlots(GameObject prefab, string prefabPath, List<ScanEntry> results)
-        {
-            CollectUIPrefabSlots(prefab, prefabPath, "Image", ImageSpriteProperty, results);
-            CollectUIPrefabSlots(prefab, prefabPath, "RawImage", RawImageTextureProperty, results);
-
-            foreach (SpriteRenderer renderer in prefab.GetComponentsInChildren<SpriteRenderer>(true))
+            using (var serialized = new SerializedObject(component))
             {
-                results.Add(MakeEntry(prefabPath, renderer.transform, prefab.transform, "SpriteRenderer",
-                    renderer.sprite != null ? renderer.sprite.name : string.Empty, false));
-            }
-
-            foreach (AudioSource audio in prefab.GetComponentsInChildren<AudioSource>(true))
-            {
-                results.Add(MakeEntry(prefabPath, audio.transform, prefab.transform, "AudioSource",
-                    audio.clip != null ? audio.clip.name : string.Empty, false));
+                SerializedProperty property = serialized.FindProperty(propertyPath);
+                UnityEngine.Object value = property != null ? property.objectReferenceValue : null;
+                return value != null ? value.name : string.Empty;
             }
         }
 
         private static ScanEntry MakeEntry(
-            string prefabPath, Transform target, Transform root, string componentType, string assetName, bool isUI)
+            string prefabPath, string scenePath, string objectPath, string componentType, string assetName, bool isUI)
         {
             return new ScanEntry
             {
                 prefabPath = prefabPath,
-                objectPath = GetHierarchyPath(target, root),
+                scenePath = scenePath,
+                objectPath = objectPath,
                 componentType = componentType,
                 currentAssetName = assetName,
                 isUI = isUI

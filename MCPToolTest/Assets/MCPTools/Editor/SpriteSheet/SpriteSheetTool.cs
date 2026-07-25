@@ -155,6 +155,8 @@ namespace MCPTools.Editor
                 { "dryRun", false },
                 { "applied", true },
                 { "assetPath", result.assetPath },
+                // MCP 경로는 확인 다이얼로그 없이 덮어쓰므로, 덮어썼다는 사실을 응답에 명시한다 (Task 10 R5).
+                { "overwroteExisting", result.overwroteExisting },
                 { "rowCount", result.rowCount },
                 { "expectedRowCount", result.expectedRowCount },
                 { "usedDetectedLayout", result.usedDetectedLayout },

@@ -29,6 +29,16 @@ namespace MCPTools.Editor
             public List<string> reasons = new List<string>();
             public bool applied;
 
+            /// <summary>
+            /// 대상 컴포넌트가 현재 참조하는 값의 캐시입니다 (미리보기 "현재 값").
+            /// <see cref="AssetApplier.GetCurrentValue"/>는 프리팹 로드·계층 탐색·SerializedObject 생성을 동반하므로
+            /// 리페인트마다 호출하지 않고 선택 변경·대상 편집·적용 시점에만 갱신합니다 (Task 8 C1/M1).
+            /// </summary>
+            public UnityEngine.Object cachedCurrentValue;
+
+            /// <summary><see cref="cachedCurrentValue"/>가 계산된 값인지 여부입니다 (false면 다음 표시 때 1회 계산).</summary>
+            public bool currentValueCached;
+
             /// <summary>상태 배지 문자열입니다.</summary>
             public string Badge
             {
@@ -71,6 +81,25 @@ namespace MCPTools.Editor
         private string _loadedListPath;
         private bool _targetsDirty;
 
+        /// <summary>
+        /// 검증을 통과한 미적용 항목 수(<see cref="ItemState.ReadyToApply"/>)와 적용된 항목 수의 캐시입니다.
+        /// 리페인트마다 LINQ로 세지 않고 상태가 바뀌는 시점
+        /// (<see cref="RebuildStates"/>/<see cref="RevalidateState"/>/<see cref="ApplyStates"/>)에만 갱신합니다 (Task 8 C7).
+        /// </summary>
+        private int _readyCount;
+
+        private int _appliedCount;
+
+        /// <summary>
+        /// 프리팹 계층 경로 드롭다운 캐시입니다 (Task 8 C2). 프리팹 경로가 바뀔 때만 다시 만듭니다.
+        /// <see cref="_pathOptionValues"/>[0]은 루트(빈 경로)이며 라벨 배열과 인덱스가 1:1로 대응합니다.
+        /// </summary>
+        private string _pathOptionsPrefabPath;
+
+        private List<string> _pathOptionValues = new List<string>();
+        private string[] _pathOptionLabels = new string[0];
+        private string[] _pathOptionChooseLabels = new string[0];
+
         /// <summary>확정본 SpriteSheets 폴더에서 찾은 시트 png 목록 (썸네일 선택기 항목).</summary>
         private string[] _sheetPaths = new string[0];
 
@@ -103,6 +132,10 @@ namespace MCPTools.Editor
             }
 
             RefreshSpriteAssetPaths();
+
+            // 다른 창에서 프리팹 계층이나 대상 값을 바꿨을 수 있으므로 캐시를 비워 다시 계산하게 한다.
+            _pathOptionsPrefabPath = null;
+            InvalidateCurrentValues();
         }
 
         /// <summary>
@@ -217,6 +250,10 @@ namespace MCPTools.Editor
                     {
                         _selectedIndex = i;
                         GUI.FocusControl(null);
+
+                        // 선택 시점에만 현재 값·경로 목록을 다시 구한다 (리페인트 비용 제거 — C1/C2).
+                        state.currentValueCached = false;
+                        _pathOptionsPrefabPath = null;
                     }
 
                     badgeStyle.normal.textColor = BadgeColor(state);
@@ -226,9 +263,8 @@ namespace MCPTools.Editor
 
             EditorGUILayout.EndScrollView();
 
-            int ready = _states.Count(s => s.ReadyToApply);
-            int applied = _states.Count(s => s.applied);
-            EditorGUILayout.LabelField($"적용 준비 {ready}개 · 적용됨 {applied}개 / 전체 {_states.Count}개",
+            // 카운트는 상태가 바뀔 때만 갱신된 캐시를 쓴다 (리페인트마다 LINQ 집계를 돌리지 않는다 — C7).
+            EditorGUILayout.LabelField($"적용 준비 {_readyCount}개 · 적용됨 {_appliedCount}개 / 전체 {_states.Count}개",
                 EditorStyles.miniLabel);
         }
 
@@ -324,7 +360,14 @@ namespace MCPTools.Editor
             EditorGUILayout.LabelField("미리보기 (현재 → 새 확정본)", EditorStyles.boldLabel);
             using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
             {
-                DrawPreviewCell("현재 값", AssetApplier.GetCurrentValue(item));
+                // 현재 값은 캐시에서 읽는다 (리페인트마다 프리팹 로드·SerializedObject 생성을 하지 않기 위함 — C1/M1).
+                // 캐시가 비어 있는 경우(로드 직후 첫 표시)에만 여기서 1회 계산한다.
+                if (!state.currentValueCached)
+                {
+                    RefreshCurrentValue(state);
+                }
+
+                DrawPreviewCell("현재 값", state.cachedCurrentValue);
 
                 GUILayout.Space(12f);
                 EditorGUILayout.LabelField("→", GUILayout.Width(20f), GUILayout.Height(ThumbnailSize * 0.5f));
@@ -378,9 +421,8 @@ namespace MCPTools.Editor
                 string.IsNullOrEmpty(item.targetPrefabPath) ? "(미지정)" : item.targetPrefabPath,
                 EditorStyles.miniLabel);
 
-            GameObject prefab = string.IsNullOrEmpty(item.targetPrefabPath)
-                ? null
-                : AssetDatabase.LoadAssetAtPath<GameObject>(item.targetPrefabPath);
+            // ObjectField가 돌려준 오브젝트가 곧 현재 대상 프리팹이다 (같은 경로를 다시 로드하지 않는다 — C6).
+            GameObject prefab = newPrefab;
 
             if (prefab == null)
             {
@@ -390,11 +432,9 @@ namespace MCPTools.Editor
                 return;
             }
 
-            // 프리팹 계층 경로 드롭다운 ("(루트)" = 빈 경로)
-            List<string> values = ObjectPathOptions(prefab);
-            var labels = new List<string>(values.Count + 1) { "(루트)" };
-            labels.AddRange(values);
-            values.Insert(0, string.Empty);
+            // 프리팹 계층 경로 드롭다운 ("(루트)" = 빈 경로). 계층 순회·문자열 조립은 프리팹이 바뀔 때만 한다 (C2).
+            EnsurePathOptions(item.targetPrefabPath, prefab);
+            List<string> values = _pathOptionValues;
 
             int index = values.IndexOf(item.targetObjectPath ?? string.Empty);
             if (index < 0)
@@ -403,7 +443,7 @@ namespace MCPTools.Editor
                 item.targetObjectPath = EditorGUILayout.TextField(
                     new GUIContent("내부 경로", "현재 값이 프리팹 계층에 없습니다. 직접 수정하거나 아래에서 선택하세요."),
                     item.targetObjectPath);
-                int picked = EditorGUILayout.Popup(new GUIContent("경로 선택"), 0, PrependChoose(labels));
+                int picked = EditorGUILayout.Popup(new GUIContent("경로 선택"), 0, _pathOptionChooseLabels);
                 if (picked > 0)
                 {
                     item.targetObjectPath = values[picked - 1];
@@ -412,13 +452,39 @@ namespace MCPTools.Editor
             }
             else
             {
-                int newIndex = EditorGUILayout.Popup(new GUIContent("내부 경로"), index, labels.ToArray());
+                int newIndex = EditorGUILayout.Popup(new GUIContent("내부 경로"), index, _pathOptionLabels);
                 if (newIndex != index)
                 {
                     item.targetObjectPath = values[newIndex];
                     GUI.changed = true;
                 }
             }
+        }
+
+        /// <summary>
+        /// 프리팹 계층 경로 드롭다운의 값·라벨 배열을 준비합니다.
+        /// 같은 프리팹 경로로 이미 만들어 두었으면 그대로 재사용하고,
+        /// 프리팹 경로가 바뀐 경우(또는 캐시를 비운 경우)에만 계층을 순회해 다시 만듭니다 (Task 8 C2).
+        /// </summary>
+        /// <param name="prefabPath">대상 프리팹 경로 (캐시 키).</param>
+        /// <param name="prefab">대상 프리팹 루트.</param>
+        private void EnsurePathOptions(string prefabPath, GameObject prefab)
+        {
+            if (_pathOptionsPrefabPath == prefabPath && _pathOptionValues.Count > 0)
+            {
+                return;
+            }
+
+            List<string> values = ObjectPathOptions(prefab);
+
+            var labels = new List<string>(values.Count + 1) { "(루트)" };
+            labels.AddRange(values);
+            values.Insert(0, string.Empty);
+
+            _pathOptionValues = values;
+            _pathOptionLabels = labels.ToArray();
+            _pathOptionChooseLabels = PrependChoose(labels);
+            _pathOptionsPrefabPath = prefabPath;
         }
 
         /// <summary>
@@ -651,6 +717,54 @@ namespace MCPTools.Editor
             state.reasons = string.IsNullOrEmpty(state.confirmedPath)
                 ? new List<string>()
                 : AssetApplier.ValidateItem(state.item, state.confirmedPath);
+
+            // 대상이 바뀌면 "현재 값"과 준비/적용 카운트도 함께 달라진다 (리페인트가 아니라 여기서 갱신 — C1/C7).
+            RefreshCurrentValue(state);
+            RecountStates();
+        }
+
+        /// <summary>
+        /// 항목의 "현재 값"(대상 컴포넌트가 참조 중인 에셋)을 다시 읽어 캐시에 담습니다.
+        /// 프리팹 로드·계층 탐색·SerializedObject 생성을 동반하므로 선택 변경·대상 편집·적용 시점에만 호출합니다.
+        /// </summary>
+        private static void RefreshCurrentValue(ItemState state)
+        {
+            state.cachedCurrentValue = AssetApplier.GetCurrentValue(state.item);
+            state.currentValueCached = true;
+        }
+
+        /// <summary>모든 항목의 "현재 값" 캐시를 무효화합니다 (다음 표시 때 필요한 항목만 다시 계산).</summary>
+        private void InvalidateCurrentValues()
+        {
+            foreach (ItemState state in _states)
+            {
+                state.currentValueCached = false;
+            }
+        }
+
+        /// <summary>
+        /// 적용 준비/적용됨 항목 수를 다시 셉니다 (Task 8 C7).
+        /// 상태가 바뀌는 시점에서만 호출하며, 리페인트는 계산 없이 이 값만 읽습니다.
+        /// </summary>
+        private void RecountStates()
+        {
+            int ready = 0;
+            int applied = 0;
+            foreach (ItemState state in _states)
+            {
+                if (state.applied)
+                {
+                    applied++;
+                }
+
+                if (state.ReadyToApply)
+                {
+                    ready++;
+                }
+            }
+
+            _readyCount = ready;
+            _appliedCount = applied;
         }
 
         /// <summary>수정된 적용 대상 값을 로드했던 AssetList JSON 파일에 저장합니다.</summary>
@@ -736,22 +850,21 @@ namespace MCPTools.Editor
                 }
 
                 // 일괄 적용은 이미 적용된 항목을 제외한다 (불필요한 프리팹 재저장 방지 — R3).
-                List<ItemState> ready = _states.Where(s => s.ReadyToApply).ToList();
-                using (new EditorGUI.DisabledScope(ready.Count == 0 || _blockedReason != null))
+                // 대상 리스트는 실제로 버튼을 눌렀을 때만 만든다 (리페인트마다 LINQ 필터를 돌리지 않는다 — C7).
+                using (new EditorGUI.DisabledScope(_readyCount == 0 || _blockedReason != null))
                 {
-                    if (GUILayout.Button($"일괄 적용 (검증 통과 {ready.Count}개)", GUILayout.Height(PrimaryButtonHeight),
+                    if (GUILayout.Button($"일괄 적용 (검증 통과 {_readyCount}개)", GUILayout.Height(PrimaryButtonHeight),
                             GUILayout.Width(220f)))
                     {
-                        ApplyStates(ready);
+                        ApplyStates(_states.Where(s => s.ReadyToApply).ToList());
                     }
                 }
             }
 
-            int alreadyApplied = _states.Count(s => s.applied);
-            if (alreadyApplied > 0)
+            if (_appliedCount > 0)
             {
                 EditorGUILayout.LabelField(
-                    $"이미 적용됨 {alreadyApplied}개 — 일괄 적용에서 제외됩니다. " +
+                    $"이미 적용됨 {_appliedCount}개 — 일괄 적용에서 제외됩니다. " +
                     "다시 적용하려면 항목을 선택하고 [선택 적용]을 눌러주세요.",
                     EditorStyles.wordWrappedMiniLabel);
             }
@@ -760,7 +873,7 @@ namespace MCPTools.Editor
         /// <summary>
         /// 대상 항목들을 적용하고 성공/실패 요약을 표시합니다.
         /// 씬 항목은 프리팹 항목과 함께 <see cref="AssetApplier.ApplyBatch"/>로 처리되며,
-        /// 같은 씬 항목은 묶어서 씬을 한 번만 열어 적용합니다.
+        /// 같은 씬 항목은 묶어서 씬을 한 번만 열어 적용하고, 같은 프리팹 항목은 묶어서 프리팹을 한 번만 저장합니다.
         /// </summary>
         private void ApplyStates(List<ItemState> targets)
         {
@@ -784,7 +897,13 @@ namespace MCPTools.Editor
                 {
                     failures.Add($"{state.item.id} ({state.item.name}): {(result != null ? result.message : "(결과 없음)")}");
                 }
+
+                // 적용으로 대상의 현재 값이 바뀌었다 — 미리보기 캐시를 다음 표시 때 다시 읽게 한다 (C1).
+                state.currentValueCached = false;
             }
+
+            // "적용됨" 배지·카운트가 적용 직후 즉시 반영되도록 여기서 다시 센다 (C7).
+            RecountStates();
 
             AssetDatabase.SaveAssets();
 
@@ -846,6 +965,11 @@ namespace MCPTools.Editor
         private void RebuildStates()
         {
             _states.Clear();
+
+            // 목록이 바뀌었으므로 리페인트용 캐시(경로 목록·카운트)도 함께 초기화한다.
+            _pathOptionsPrefabPath = null;
+            RecountStates();
+
             if (_document == null)
             {
                 return;
@@ -865,6 +989,8 @@ namespace MCPTools.Editor
                 state.applied = !string.IsNullOrEmpty(item.id) && appliedIds.Contains(item.id);
                 _states.Add(state);
             }
+
+            RecountStates();
         }
     }
 }

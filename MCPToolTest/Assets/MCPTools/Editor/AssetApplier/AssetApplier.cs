@@ -64,6 +64,25 @@ namespace MCPTools.Editor
         /// <returns>확정본 경로 (Assets/ 기준 상대 경로). 찾지 못하면 null.</returns>
         public static string FindConfirmedAssetPath(MCPToolSettings settings, AssetListItem item)
         {
+            return FindConfirmedAssetPath(settings, item, null);
+        }
+
+        /// <summary>
+        /// <see cref="FindConfirmedAssetPath(MCPToolSettings, AssetListItem)"/>와 같은 규칙으로 확정본을 찾되,
+        /// GenerationResults.json의 기록을 <b>미리 만들어 둔 맵</b>에서 조회합니다 (일괄 적용용, C19).
+        /// 항목마다 결과 문서를 다시 읽고 파싱하지 않기 위한 경로이며, 맵이 null이면 단건 경로와 동일하게
+        /// 문서를 직접 읽습니다.
+        /// </summary>
+        /// <param name="settings">설정 객체.</param>
+        /// <param name="item">대상 항목.</param>
+        /// <param name="confirmedOutputs">
+        /// 항목 ID → 확정본 경로 맵 (<see cref="CandidateGenerator.GetConfirmedOutputPaths"/> 결과).
+        /// null이면 문서를 직접 읽습니다.
+        /// </param>
+        /// <returns>확정본 경로 (Assets/ 기준 상대 경로). 찾지 못하면 null.</returns>
+        private static string FindConfirmedAssetPath(
+            MCPToolSettings settings, AssetListItem item, Dictionary<string, string> confirmedOutputs)
+        {
             if (settings == null || item == null)
             {
                 return null;
@@ -82,25 +101,38 @@ namespace MCPTools.Editor
             }
 
             // 1) GenerationResults.json 기록 우선 (새 위치 3_Confirmed/ → 없으면 구 위치)
-            string resultsPath = CandidateGenerator.ResolveResultsPathForRead(settings);
-            if (File.Exists(resultsPath))
+            if (confirmedOutputs != null)
             {
-                var doc = MiniJson.Deserialize(File.ReadAllText(resultsPath)) as Dictionary<string, object>;
-                if (doc != null && doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
+                // 일괄 경로: 배치 시작 시 1회 만들어 둔 맵에서 조회한다 (문서 읽기·파싱 N회 → 1회).
+                string recorded;
+                if (confirmedOutputs.TryGetValue(item.id, out recorded)
+                    && !string.IsNullOrEmpty(recorded) && File.Exists(recorded))
                 {
-                    foreach (object entry in list)
+                    return recorded.Replace('\\', '/');
+                }
+            }
+            else
+            {
+                string resultsPath = CandidateGenerator.ResolveResultsPathForRead(settings);
+                if (File.Exists(resultsPath))
+                {
+                    var doc = MiniJson.Deserialize(File.ReadAllText(resultsPath)) as Dictionary<string, object>;
+                    if (doc != null && doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
                     {
-                        var dict = entry as Dictionary<string, object>;
-                        if (dict == null)
+                        foreach (object entry in list)
                         {
-                            continue;
-                        }
+                            var dict = entry as Dictionary<string, object>;
+                            if (dict == null)
+                            {
+                                continue;
+                            }
 
-                        string id = dict.TryGetValue("assetItemId", out object idObj) && idObj is string s ? s : null;
-                        string output = dict.TryGetValue("outputPath", out object outObj) && outObj is string o ? o : null;
-                        if (id == item.id && !string.IsNullOrEmpty(output) && File.Exists(output))
-                        {
-                            return output.Replace('\\', '/');
+                            string id = dict.TryGetValue("assetItemId", out object idObj) && idObj is string s ? s : null;
+                            string output = dict.TryGetValue("outputPath", out object outObj) && outObj is string o ? o : null;
+                            if (id == item.id && !string.IsNullOrEmpty(output) && File.Exists(output))
+                            {
+                                return output.Replace('\\', '/');
+                            }
                         }
                     }
                 }
@@ -177,6 +209,25 @@ namespace MCPTools.Editor
         /// <returns>실패 사유 목록. 비어 있으면 검증 통과.</returns>
         public static List<string> ValidateItem(AssetListItem item, string assetPath)
         {
+            Component component;
+            return ValidateItem(item, assetPath, out component);
+        }
+
+        /// <summary>
+        /// <see cref="ValidateItem(AssetListItem, string)"/>와 동일한 검증을 수행하고,
+        /// 검증 과정에서 찾은 대상 컴포넌트를 함께 돌려줍니다 (C20 — 적용 단계가 같은 탐색을 반복하지 않게 하기 위함).
+        /// </summary>
+        /// <param name="item">대상 항목.</param>
+        /// <param name="assetPath">적용할 에셋 경로 (Assets/ 기준 상대 경로). null이면 확정본 자동 탐색.</param>
+        /// <param name="component">
+        /// 찾은 대상 컴포넌트. 찾지 못했으면 null입니다.
+        /// 반환된 사유 목록이 비어 있으면(= 검증 통과) 프리팹 항목에서는 항상 null이 아닙니다.
+        /// </param>
+        /// <returns>실패 사유 목록. 비어 있으면 검증 통과.</returns>
+        internal static List<string> ValidateItem(AssetListItem item, string assetPath, out Component component)
+        {
+            component = null;
+
             var reasons = new List<string>();
             if (item == null)
             {
@@ -194,7 +245,6 @@ namespace MCPTools.Editor
             }
 
             // 프리팹/씬 / 내부 경로 / 컴포넌트
-            Component component = null;
             if (item.IsSceneItem)
             {
                 // 씬 항목: 씬 파일 존재와 (열려 있는 경우에 한해) 오브젝트·컴포넌트를 검증한다.
@@ -516,58 +566,120 @@ namespace MCPTools.Editor
         /// <returns>적용 결과.</returns>
         public static ApplyResult ApplyToPrefab(AssetListItem item, string assetPath)
         {
-            var result = new ApplyResult
-            {
-                prefabPath = item != null ? item.targetPrefabPath : string.Empty,
-                objectPath = item != null ? item.targetObjectPath : string.Empty
-            };
+            // 단건도 "항목 1개짜리 그룹"으로 처리해 일괄 경로와 코드가 갈라지지 않게 한다
+            // (검증 사유·결과 필드·이력 기록·저장 실패 처리가 항상 같은 코드에서 나온다).
+            var results = new ApplyResult[1];
+            ApplyPrefabGroup(
+                item != null ? item.targetPrefabPath : string.Empty,
+                new List<int> { 0 }, new List<AssetListItem> { item }, new[] { assetPath },
+                null, null, results);
+            return results[0];
+        }
 
-            if (string.IsNullOrEmpty(assetPath))
-            {
-                assetPath = FindConfirmedAssetPath(MCPToolSettings.GetOrCreate(), item);
-            }
-
-            List<string> reasons = ValidateItem(item, assetPath);
-            if (reasons.Count > 0)
-            {
-                result.message = string.Join(" / ", reasons);
-                return result;
-            }
-
-            result.appliedAssetPath = assetPath.Replace('\\', '/');
-
+        /// <summary>
+        /// 같은 프리팹을 대상으로 하는 항목들을 <b>프리팹 1회 로드 → 항목별 할당 → 저장 1회</b>로 적용합니다 (C17).
+        /// 항목별 <c>Undo</c> 등록(<see cref="AssignAsset"/>·<see cref="LinkAnimatorController"/>)은 개별 적용과 동일하며,
+        /// <see cref="PrefabUtility.SavePrefabAsset(GameObject)"/>만 그룹당 1회로 줄어듭니다.
+        /// 일부 항목이 검증·할당에 실패해도 나머지 성공 항목은 그대로 적용·저장하고,
+        /// <b>성공한 항목만</b> 항목당 1회 <see cref="ApplyHistory.Record"/>에 기록합니다.
+        /// </summary>
+        /// <param name="prefabPath">그룹의 대상 프리팹 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="indices">이 그룹에 속한 항목의 인덱스 목록.</param>
+        /// <param name="items">전체 항목 목록.</param>
+        /// <param name="assetPaths">항목별 적용 에셋 경로 (요소가 null이면 확정본 자동 탐색).</param>
+        /// <param name="settings">설정 객체 (null이면 조회).</param>
+        /// <param name="confirmedOutputs">확정본 경로 맵 (null이면 항목별로 결과 문서를 읽음).</param>
+        /// <param name="results">결과를 채울 배열 (items와 같은 길이).</param>
+        private static void ApplyPrefabGroup(
+            string prefabPath, List<int> indices, List<AssetListItem> items, IList<string> assetPaths,
+            MCPToolSettings settings, Dictionary<string, string> confirmedOutputs, ApplyResult[] results)
+        {
             // 임포트된 프리팹 에셋 자체를 수정한다 (씬 인스턴스·프리팹 스테이지는 건드리지 않음).
-            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(item.targetPrefabPath);
-            Transform target = FindTargetTransform(prefab, item.targetObjectPath);
-            Component component = FindTargetComponent(target, item);
+            GameObject prefab = string.IsNullOrEmpty(prefabPath)
+                ? null
+                : AssetDatabase.LoadAssetAtPath<GameObject>(prefabPath);
+
+            // 값을 실제로 바꾼 항목들 (저장 후 이력을 남길 대상).
+            var applied = new List<int>();
+
+            foreach (int i in indices)
+            {
+                AssetListItem item = items[i];
+                var result = new ApplyResult
+                {
+                    prefabPath = item != null ? item.targetPrefabPath : string.Empty,
+                    objectPath = item != null ? item.targetObjectPath : string.Empty
+                };
+                results[i] = result;
+
+                string assetPath = i < (assetPaths != null ? assetPaths.Count : 0) ? assetPaths[i] : null;
+                if (string.IsNullOrEmpty(assetPath))
+                {
+                    assetPath = FindConfirmedAssetPath(
+                        settings ?? MCPToolSettings.GetOrCreate(), item, confirmedOutputs);
+                }
+
+                // 검증이 찾아 둔 컴포넌트를 그대로 쓴다 (C20 — 프리팹 로드·계층 탐색·컴포넌트 탐색 중복 제거).
+                Component component;
+                List<string> reasons = ValidateItem(item, assetPath, out component);
+                if (reasons.Count > 0)
+                {
+                    result.message = string.Join(" / ", reasons);
+                    continue;
+                }
+
+                result.appliedAssetPath = assetPath.Replace('\\', '/');
+
+                try
+                {
+                    AssignAsset(component, assetPath, item);
+
+                    // 컨트롤러 연결은 같은 프리팹 수정이므로 저장 전에 함께 처리해 한 번만 저장한다.
+                    string linked = LinkAnimatorController(item, prefab);
+
+                    result.linkedControllerPath = linked ?? string.Empty;
+                    result.success = true;
+                    result.message =
+                        $"적용 완료: {item.targetPrefabPath} → {component.GetType().Name} ({result.appliedAssetPath})" +
+                        (linked != null ? $" + Animator 연결 ({linked})" : string.Empty);
+                    applied.Add(i);
+                }
+                catch (Exception e)
+                {
+                    result.message = $"적용 중 오류가 발생했습니다: {e.Message}";
+                }
+            }
+
+            if (applied.Count == 0)
+            {
+                return; // 성공한 항목이 하나도 없으면 저장하지 않는다 (프리팹을 건드리지 않았다).
+            }
 
             try
             {
-                AssignAsset(component, assetPath, item);
-
-                // 컨트롤러 연결은 같은 프리팹 수정이므로 저장 전에 함께 처리해 한 번만 저장한다.
-                string linked = LinkAnimatorController(item, prefab);
                 PrefabUtility.SavePrefabAsset(prefab);
-
-                result.linkedControllerPath = linked ?? string.Empty;
-                result.success = true;
-                result.message =
-                    $"적용 완료: {item.targetPrefabPath} → {component.GetType().Name} ({result.appliedAssetPath})" +
-                    (linked != null ? $" + Animator 연결 ({linked})" : string.Empty);
             }
             catch (Exception e)
             {
-                result.message = $"적용 중 오류가 발생했습니다: {e.Message}";
+                // 저장에 실패하면 디스크에 남은 것이 없으므로 그룹의 성공 판정을 되돌린다
+                // (개별 적용에서 저장 예외가 "적용 중 오류"로 보고되던 것과 같은 결과).
+                foreach (int i in applied)
+                {
+                    results[i].success = false;
+                    results[i].linkedControllerPath = string.Empty;
+                    results[i].message = $"적용 중 오류가 발생했습니다: {e.Message}";
+                }
+
+                return;
             }
 
             // 적용 이력 기록(R3)은 프리팹 적용의 유일한 성공 경로인 이곳에서만 한다.
-            // Apply(단건)·ApplyBatch(일괄)·MCP 도구·파이프라인이 모두 이 함수를 거치므로 한 번의 적용이 한 번만 기록된다.
-            if (result.success)
+            // Apply(단건)·ApplyBatch(일괄)·MCP 도구·파이프라인이 모두 이 함수를 거치며,
+            // 성공한 항목 1건당 정확히 1회 기록된다 (그룹 전체가 1회가 아니다).
+            foreach (int i in applied)
             {
-                ApplyHistory.Record(item, result);
+                ApplyHistory.Record(items[i], results[i]);
             }
-
-            return result;
         }
 
         /// <summary>
@@ -675,12 +787,16 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
-        /// 항목들을 순차 적용합니다 (프리팹/씬 자동 분기). 같은 씬을 대상으로 하는 항목들은 묶어서
-        /// 씬을 한 번만 열어 처리한 뒤 저장·닫기하므로 일괄 적용 시 씬 열기 비용을 줄입니다.
+        /// 항목들을 순차 적용합니다 (프리팹/씬 자동 분기). 같은 씬 / 같은 프리팹을 대상으로 하는 항목들은 묶어서
+        /// 씬은 한 번만 열어 처리한 뒤 저장·닫기하고, 프리팹은 한 번만 로드해 적용한 뒤 <b>1회만 저장</b>합니다
+        /// (C17 — 같은 프리팹에 항목 N개를 적용해도 프리팹 저장은 1회).
+        /// 배치 전체는 <see cref="AssetDatabase.StartAssetEditing"/>/<see cref="AssetDatabase.StopAssetEditing"/>로
+        /// 감싸 항목마다 임포트가 즉시 트리거되지 않게 합니다 (C18). <c>SaveAssets()</c>는 호출부에서 배치 후 1회 수행합니다.
+        /// 확정본 경로 기록(GenerationResults.json)은 배치 시작 시 <b>1회</b>만 읽습니다 (C19).
         /// </summary>
         /// <param name="items">대상 항목 목록.</param>
         /// <param name="assetPaths">항목별 적용 에셋 경로 (items와 같은 길이. 요소가 null이면 확정본 자동 탐색).</param>
-        /// <returns>items와 같은 순서의 적용 결과 목록.</returns>
+        /// <returns>items와 같은 순서·같은 길이의 적용 결과 목록.</returns>
         public static List<ApplyResult> ApplyBatch(List<AssetListItem> items, IList<string> assetPaths)
         {
             var results = new ApplyResult[items != null ? items.Count : 0];
@@ -689,40 +805,78 @@ namespace MCPTools.Editor
                 return new List<ApplyResult>(results);
             }
 
-            // 씬 항목을 씬 경로별로 묶는다 (프리팹 항목은 개별 처리).
+            MCPToolSettings settings = MCPToolSettings.GetOrCreate();
+            Dictionary<string, string> confirmedOutputs = CandidateGenerator.GetConfirmedOutputPaths(settings);
+
+            // 씬 항목은 씬 경로별로, 프리팹 항목은 프리팹 경로별로 묶는다.
+            // 대상 경로가 없는 항목(또는 null 항목)은 어차피 검증에서 걸리므로 항목 1개짜리 그룹으로 처리한다.
             var sceneGroups = new Dictionary<string, List<int>>();
+            var prefabGroups = new Dictionary<string, List<int>>(StringComparer.Ordinal);
+            var ungrouped = new List<int>();
             for (int i = 0; i < items.Count; i++)
             {
                 AssetListItem item = items[i];
-                string path = i < (assetPaths != null ? assetPaths.Count : 0) ? assetPaths[i] : null;
                 if (item != null && item.IsSceneItem)
                 {
-                    string key = item.targetScenePath.Replace('\\', '/');
-                    if (!sceneGroups.TryGetValue(key, out List<int> indices))
-                    {
-                        sceneGroups[key] = indices = new List<int>();
-                    }
-
-                    indices.Add(i);
+                    AddToGroup(sceneGroups, item.targetScenePath.Replace('\\', '/'), i);
+                }
+                else if (item != null && !string.IsNullOrEmpty(item.targetPrefabPath))
+                {
+                    // 키는 항목에 적힌 경로 문자열 그대로 쓴다 (로드 경로가 개별 적용과 완전히 같아야 하므로).
+                    AddToGroup(prefabGroups, item.targetPrefabPath, i);
                 }
                 else
                 {
-                    results[i] = ApplyToPrefab(item, path);
+                    ungrouped.Add(i);
                 }
             }
 
-            foreach (KeyValuePair<string, List<int>> group in sceneGroups)
+            try
             {
-                ApplySceneGroup(group.Key, group.Value, items, assetPaths, results);
+                AssetDatabase.StartAssetEditing();
+
+                foreach (int i in ungrouped)
+                {
+                    ApplyPrefabGroup(
+                        string.Empty, new List<int> { i }, items, assetPaths, settings, confirmedOutputs, results);
+                }
+
+                foreach (KeyValuePair<string, List<int>> group in prefabGroups)
+                {
+                    ApplyPrefabGroup(
+                        group.Key, group.Value, items, assetPaths, settings, confirmedOutputs, results);
+                }
+
+                foreach (KeyValuePair<string, List<int>> group in sceneGroups)
+                {
+                    ApplySceneGroup(
+                        group.Key, group.Value, items, assetPaths, settings, confirmedOutputs, results);
+                }
+            }
+            finally
+            {
+                AssetDatabase.StopAssetEditing();
             }
 
             return new List<ApplyResult>(results);
         }
 
+        /// <summary>경로별 인덱스 그룹에 항목 인덱스를 추가합니다 (없으면 그룹을 만듭니다).</summary>
+        private static void AddToGroup(Dictionary<string, List<int>> groups, string key, int index)
+        {
+            List<int> indices;
+            if (!groups.TryGetValue(key, out indices))
+            {
+                groups[key] = indices = new List<int>();
+            }
+
+            indices.Add(index);
+        }
+
         /// <summary>같은 씬을 대상으로 하는 항목들을 씬을 한 번만 열어 순차 적용합니다.</summary>
         private static void ApplySceneGroup(
             string scenePath, List<int> indices, List<AssetListItem> items, IList<string> assetPaths,
-            ApplyResult[] results)
+            MCPToolSettings settings, Dictionary<string, string> confirmedOutputs, ApplyResult[] results)
         {
             Scene scene = SceneManager.GetSceneByPath(scenePath);
             bool openedHere = false;
@@ -753,7 +907,8 @@ namespace MCPTools.Editor
 
                     if (string.IsNullOrEmpty(assetPath))
                     {
-                        assetPath = FindConfirmedAssetPath(MCPToolSettings.GetOrCreate(), item);
+                        assetPath = FindConfirmedAssetPath(
+                            settings ?? MCPToolSettings.GetOrCreate(), item, confirmedOutputs);
                     }
 
                     List<string> reasons = ValidateItem(item, assetPath);
@@ -877,22 +1032,25 @@ namespace MCPTools.Editor
         /// </summary>
         private static void ValidateAudioField(Component component, string fieldPath, List<string> reasons)
         {
-            var serialized = new SerializedObject(component);
-            SerializedProperty property = serialized.FindProperty(fieldPath);
-            if (property == null)
+            // SerializedObject는 네이티브 메모리를 잡으므로 반드시 해제한다 (M1).
+            using (var serialized = new SerializedObject(component))
             {
-                reasons.Add(
-                    $"컴포넌트 \"{component.GetType().Name}\"에서 직렬화 필드 \"{fieldPath}\"를 찾을 수 없습니다. " +
-                    "필드 이름(SerializedProperty 경로)과 [SerializeField]/public 여부를 확인해주세요.");
-                return;
-            }
+                SerializedProperty property = serialized.FindProperty(fieldPath);
+                if (property == null)
+                {
+                    reasons.Add(
+                        $"컴포넌트 \"{component.GetType().Name}\"에서 직렬화 필드 \"{fieldPath}\"를 찾을 수 없습니다. " +
+                        "필드 이름(SerializedProperty 경로)과 [SerializeField]/public 여부를 확인해주세요.");
+                    return;
+                }
 
-            if (property.propertyType != SerializedPropertyType.ObjectReference
-                || (property.type != "PPtr<$AudioClip>" && property.type != "PPtr<$Object>"))
-            {
-                reasons.Add(
-                    $"컴포넌트 \"{component.GetType().Name}\"의 필드 \"{fieldPath}\"는 AudioClip 참조 필드가 아닙니다 " +
-                    $"(실제 타입: {property.type}).");
+                if (property.propertyType != SerializedPropertyType.ObjectReference
+                    || (property.type != "PPtr<$AudioClip>" && property.type != "PPtr<$Object>"))
+                {
+                    reasons.Add(
+                        $"컴포넌트 \"{component.GetType().Name}\"의 필드 \"{fieldPath}\"는 AudioClip 참조 필드가 아닙니다 " +
+                        $"(실제 타입: {property.type}).");
+                }
             }
         }
 
@@ -1147,7 +1305,12 @@ namespace MCPTools.Editor
             return found;
         }
 
-        /// <summary>대상 오브젝트에서 항목 종류에 맞는 컴포넌트를 찾습니다 (uGUI는 타입 이름으로 판정).</summary>
+        /// <summary>
+        /// 대상 오브젝트에서 항목 종류에 맞는 컴포넌트를 찾습니다 (uGUI는 타입 이름으로 판정).
+        /// 컴포넌트 배열은 <b>1회만</b> 받아 한 번만 순회하며(C21), 기대 이름의 우선순위
+        /// (<see cref="ExpectedComponentNames"/>의 순서 — 예: Image가 RawImage보다 우선)는 그대로 유지합니다.
+        /// 같은 우선순위의 컴포넌트가 여럿이면 컴포넌트 순서상 첫 번째를 돌려줍니다.
+        /// </summary>
         private static Component FindTargetComponent(Transform target, AssetListItem item)
         {
             if (target == null)
@@ -1156,41 +1319,57 @@ namespace MCPTools.Editor
             }
 
             string[] expected = ExpectedComponentNames(item);
-            foreach (string name in expected)
+            Component best = null;
+            int bestRank = int.MaxValue;
+            foreach (Component component in target.GetComponents<Component>())
             {
-                foreach (Component component in target.GetComponents<Component>())
+                if (component == null)
                 {
-                    if (component != null && component.GetType().Name == name)
+                    continue;
+                }
+
+                int rank = Array.IndexOf(expected, component.GetType().Name);
+                if (rank >= 0 && rank < bestRank)
+                {
+                    best = component;
+                    bestRank = rank;
+                    if (bestRank == 0)
                     {
-                        return component;
+                        return best; // 최우선 이름을 찾았으면 더 볼 필요가 없다.
                     }
                 }
             }
 
-            return null;
+            return best;
         }
 
         /// <summary>SerializedProperty로 오브젝트 참조 값을 할당합니다 (ApplyModifiedProperties가 Undo에 함께 기록됨).</summary>
         private static void SetObjectProperty(Component component, string propertyPath, UnityEngine.Object value)
         {
-            var serialized = new SerializedObject(component);
-            SerializedProperty property = serialized.FindProperty(propertyPath);
-            if (property == null)
+            // SerializedObject는 네이티브 메모리를 잡으므로 반드시 해제한다 (M1).
+            // ApplyModifiedProperties()가 using 블록 안에서 끝나야 값이 반영된 뒤 Dispose된다.
+            using (var serialized = new SerializedObject(component))
             {
-                throw new InvalidOperationException(
-                    $"컴포넌트 {component.GetType().Name}에서 프로퍼티 \"{propertyPath}\"를 찾을 수 없습니다.");
-            }
+                SerializedProperty property = serialized.FindProperty(propertyPath);
+                if (property == null)
+                {
+                    throw new InvalidOperationException(
+                        $"컴포넌트 {component.GetType().Name}에서 프로퍼티 \"{propertyPath}\"를 찾을 수 없습니다.");
+                }
 
-            property.objectReferenceValue = value;
-            serialized.ApplyModifiedProperties();
+                property.objectReferenceValue = value;
+                serialized.ApplyModifiedProperties();
+            }
         }
 
         /// <summary>SerializedProperty로 오브젝트 참조 값을 읽습니다.</summary>
         private static UnityEngine.Object GetObjectProperty(Component component, string propertyPath)
         {
-            var serialized = new SerializedObject(component);
-            SerializedProperty property = serialized.FindProperty(propertyPath);
-            return property != null ? property.objectReferenceValue : null;
+            using (var serialized = new SerializedObject(component))
+            {
+                SerializedProperty property = serialized.FindProperty(propertyPath);
+                return property != null ? property.objectReferenceValue : null;
+            }
         }
     }
 }

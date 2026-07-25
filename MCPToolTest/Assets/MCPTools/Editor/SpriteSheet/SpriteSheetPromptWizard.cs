@@ -1040,9 +1040,20 @@ namespace MCPTools.Editor
         {
             try
             {
-                SpriteSheetImportResult result = SpriteSheetImporter.ApplySlices(_detection, false, true);
+                // 창 경로는 대화형 — 기존 시트를 덮어쓰기 전에 확인을 받는다 (Task 10 R5).
+                SpriteSheetImportResult result =
+                    SpriteSheetImporter.ApplySlices(_detection, false, true, true);
+                if (result.canceled)
+                {
+                    _importResultMessage =
+                        $"덮어쓰기를 취소했습니다: {result.assetPath}\n" +
+                        "다른 이름으로 저장하려면 원본 이미지 파일명을 바꾼 뒤 다시 검출해주세요.";
+                    return;
+                }
+
                 _importResultMessage =
-                    $"임포트 완료: {result.assetPath}\n" +
+                    (result.overwroteExisting ? "임포트 완료 (기존 시트를 덮어썼습니다): " : "임포트 완료: ")
+                    + $"{result.assetPath}\n" +
                     $"행 {result.rowCount}개 / 프레임 총 {result.totalFrameCount}개 " +
                     $"(행별: {string.Join(", ", result.framesPerRow)}), 셀 {result.cellWidth}x{result.cellHeight}px\n" +
                     $"슬라이스 이름: {string.Join(", ", result.rowActions)} (Sprite Mode=Multiple)";

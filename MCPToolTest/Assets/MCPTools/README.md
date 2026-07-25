@@ -140,7 +140,15 @@ Assets/Generated/
 | `candidateCount` | 4 | 항목당 후보 생성 개수 (3단계 창의 **후보 개수** 슬라이더 1~12와 같은 값) |
 | `spritePixelsPerUnit` | 100 | 확정 시 Sprite 임포트에 적용할 Pixels Per Unit |
 | `shutdownBridgeOnEditorQuit` | true | Unity 종료 시 이 도구로 시작한 브리지 서버를 함께 종료. 끄면 브리지가 계속 실행된 채 남음 |
-| `unloadModelsAfterBatch` | true | 생성(단건/일괄) 완료 후 브리지 `/free`로 ComfyUI 모델을 언로드해 VRAM/메모리를 확보. 다음 생성 시 모델을 다시 로드하므로 첫 생성이 느려질 수 있음 |
+| `unloadModelsAfterBatch` | **false** | **일괄** 생성 완료 후 브리지 `/free`로 ComfyUI 모델을 언로드해 VRAM/메모리를 확보. 아래 "VRAM 트레이드오프" 참조 |
+
+**`unloadModelsAfterBatch`의 VRAM 트레이드오프**
+
+기본값이 `false`(모델을 로드된 채 유지)입니다. 켜면 생성이 끝날 때마다 모델이 언로드되어 **다음 생성에서 체크포인트를 다시 로드**하므로, SDXL/Flux 계열(6~12GB) 기준 **회차당 약 10~40초가 순수 대기로 추가**됩니다. "후보 4개 생성"을 연속으로 누르는 흔한 사용 패턴에서 체감 소요가 2배 이상 늘어납니다.
+
+- **VRAM이 부족해 연속 생성 중 OOM이 나는 환경에서만 켜세요.** `Tools/MCP/Settings`의 "일괄 생성 후 모델 언로드" 체크박스, 또는 3단계 창의 같은 토글로 켤 수 있습니다.
+- 켜더라도 **단건 생성에는 적용되지 않습니다** — 일괄 생성이 끝난 뒤에만 언로드합니다.
+- 이전 버전에서 이 값이 `true`로 저장된 설정 에셋은 **한 번만 자동으로 `false`로 보정**되고 콘솔에 안내가 출력됩니다(`settingsVersion`으로 1회만 실행). 의도적으로 켜 두셨다면 위 방법으로 다시 켜면 되고, 그 뒤로는 다시 보정되지 않습니다.
 
 설정 창(`Tools/MCP/Settings`)의 버튼:
 
@@ -507,12 +515,16 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
   - `promptSetPath: string` (필수) — 2단계 PromptSet JSON 경로 (`Assets/` 상대). 없으면 오류.
   - `autoSelect: string` (선택, 기본 `"first"`) — `"first"`: 각 항목의 후보 중 **가장 낮은 시드**를 확정한 뒤 대상에 일괄 적용. `"none"`: 후보만 생성하고 확정/적용은 하지 않음.
   - `workflowName: string` (선택) — 워크플로 이름 (`GenerateImage` | `GenerateImageFlux` | `UI` | `StyleChange` | `Audio`). 생략 시 항목 종류별 자동 선택.
-- 반환 `data`: `{ promptSetPath, assetListPath, pendingSelections, applied, failed }`
+- **Job을 시작하고 즉시 반환합니다** (완료까지 기다리지 않음). 반환 `data`: `{ status: "started", promptSetPath, assetListPath, itemCount, timeoutSeconds, statusNote }`
+- **진행 상황과 최종 결과는 `mcptools_status`의 `pipeline` 블록으로 폴링**합니다.
   - `pendingSelections` — `autoSelect="none"`에서 채워짐: `[{ assetItemId, candidates: [{ path, seed }] }]`. 이후 `mcptools_select_candidate` + `mcptools_apply_asset`으로 진행.
   - `applied` — `autoSelect="first"`에서 채워짐: `[{ id, prefabPath, scenePath, objectPath, appliedAssetPath }]`.
   - `failed` — 항목 단위 실패(생성/확정/적용): `[{ id, reason }]`. 부분 성공을 지원합니다.
   - 적용 대상 정보는 PromptSet의 `assetListPath` 메타로 AssetList를 로드해 얻습니다. `assetListPath`가 비어 있거나 파일이 없으면 확정본은 생성되지만 적용은 건너뛰고 `failed`에 안내됩니다.
-- **주의(동기 처리)**: 각 항목의 생성을 스레드풀에서 시작해 순차 완료를 대기하므로, **생성이 끝날 때까지 에디터 메인 스레드가 블로킹됩니다**(수 초~수 분). 창(3단계)은 Job 방식으로 멈추지 않지만, run_pipeline은 결과를 한 번에 반환하기 위해 이 블로킹을 감수합니다. 에디터를 멈추지 않고 진행하려면 3단계 창 또는 `mcptools_generate_candidates`(Job) 경로를 사용하세요.
+- **실행 중에도 에디터가 멈추지 않습니다.** 창을 움직이고 다른 작업을 계속할 수 있습니다.
+- **Job은 동시에 1개만** 실행할 수 있습니다. 실행 중에 다시 호출하면 현재 진행 위치와 남은 타임아웃을 담아 거부합니다.
+- **타임아웃**: `항목 수 × jobTimeoutSeconds`(기본 600초)를 넘기면 Job이 `failed`로 끝납니다. 수동 취소 수단은 없으며, 타임아웃이 지나거나 도메인 리로드(스크립트 재컴파일)가 일어나면 상태가 초기화됩니다.
+- 항목마다가 아니라 **모든 항목의 생성이 끝난 뒤 한 번** 에셋을 임포트합니다(프로젝트 전체 스캔을 항목 수만큼 반복하지 않기 위함). 그래서 생성 도중에는 후보 파일이 프로젝트 창에 아직 보이지 않을 수 있습니다.
 
 ### `mcptools_spritesheet_build_prompt` — 시트 프롬프트 조립
 
@@ -542,6 +554,7 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
   - `version`, `unityVersion`
   - `config` — `{ comfyUIServerUrl, bridgeServerUrl, generatedRootPath, docsRootPath, defaultImageWorkflow, candidateCount }`
   - `outputs` — `{ assetListCount, latestAssetList, promptSetCount, latestPromptSet, imageCount, audioCount, candidateFolderCount, confirmedCount }`
+  - `pipeline` — `mcptools_run_pipeline` Job의 진행 상태: `{ status: "idle"|"running"|"completed"|"failed", message, phase, promptSetPath, assetListPath, autoSelect, itemCount, currentIndex, currentItemId, currentItemProgress, elapsedSeconds, timeoutSeconds, pendingSelections, applied, failed }`. **run_pipeline의 완료 여부와 결과를 이 블록으로 폴링합니다.**
   - `serverHealthNote` — 서버 실시간 연결 확인은 하지 않는다는 안내(동기 블로킹 방지). 연결 확인은 3단계 창 또는 브리지 `/health` 참조.
 
 ### 산출물 형식 — PromptSet JSON 스키마
@@ -706,6 +719,10 @@ UPM으로 설치한 패키지 폴더(`Packages/...`)는 **읽기 전용**입니�
 
 ## 문제 해결
 
+- **연속 생성이 회차마다 느려짐 (회차당 10~40초 추가)** — `unloadModelsAfterBatch`가 켜져 있으면 생성이 끝날 때마다 ComfyUI 모델이 언로드되어 다음 생성에서 체크포인트를 다시 로드합니다. 기본값은 꺼짐이며, `Tools/MCP/Settings`에서 확인하세요. → [VRAM 트레이드오프](#mcptoolsettings-설정-항목)
+- **연속 생성 중 VRAM 부족(OOM)** — 반대로 `unloadModelsAfterBatch`를 **켜세요.** 회차마다 모델 재로드 대기가 붙는 대신 VRAM이 확보됩니다.
+- **1단계 스캔이 오래 걸림** — 스캔 시간은 대상 폴더의 프리팹 수에 비례합니다. **스캔 루트 경로**를 `Assets` 전체가 아니라 실제로 필요한 하위 폴더(예: `Assets/Prefabs`)로 좁히면 크게 줄어듭니다. 스캔 대상 씬도 필요한 것만 지정하세요.
+- **ComfyUI에 방금 추가한 모델·커스텀 노드가 목록에 안 보임** — 브리지가 ComfyUI의 설치 목록(`/object_info`)을 **60초 캐시**합니다. 60초를 기다리거나, 3단계 창에서 생성 후 모델 언로드(`/free`)가 실행되면 즉시 갱신됩니다. 브리지에 직접 `GET /workflows?refresh=1`을 호출해도 됩니다.
 - **패키지 설치가 "git executable not found"로 실패** — UPM의 git URL 설치는 사용자 PC의 `git`(2.14 이상)을 호출합니다. [git](https://git-scm.com/downloads)을 설치한 뒤 **Unity 에디터와 Unity Hub를 모두 종료했다 다시 실행**하세요(실행 중인 프로세스는 옛 PATH를 계속 사용합니다). 설치 후 `git --version`이 터미널에서 동작하는지 확인하면 확실합니다.
 - **`Assembly with name 'MCPTools.Editor' already exists` 컴파일 오류** — `Assets/` 아래에 예전 설치본(`MCPTools` 폴더)이 남은 채 패키지를 추가한 경우입니다. **`Assets/` 쪽 `MCPTools` 폴더를 삭제**하세요. `Assets/MCPTools.User/`는 사용자 데이터이므로 **지우면 안 됩니다.** → [설치](#설치)
 - **설정이 저장되지 않거나 값이 되돌아감** — 설정 에셋이 여러 개인지 확인하세요. 콘솔에 "설정 에셋이 N개 발견되어 첫 번째를 사용합니다" 경고와 경로 목록이 출력됩니다. 사용하지 않는 에셋을 지우면 됩니다. 정상 위치는 `Assets/MCPTools.User/MCPToolSettings.asset`입니다(구버전 설치본의 `Assets/MCPTools/Editor/Common/MCPToolSettings.asset`도 그대로 사용됨).

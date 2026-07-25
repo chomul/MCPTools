@@ -389,17 +389,20 @@ namespace MCPTools.Editor
 
     /// <summary>
     /// 파이프라인 후반부 자동화 도구(mcptools_run_pipeline)를 MCP for Unity에 노출합니다.
-    /// PromptSet(2단계 산출물)부터 3단계 생성 → (autoSelect="first"면) 확정 → 4단계 적용을 순차 실행합니다.
+    /// PromptSet(2단계 산출물)부터 3단계 생성 → (autoSelect="first"면) 확정 → 4단계 적용을 Job으로 실행하며,
+    /// 호출은 즉시 status:"started"로 반환하고 진행·결과는 mcptools_status의 pipeline 블록으로 조회합니다.
     /// </summary>
     [McpForUnityTool("mcptools_run_pipeline",
-        Description = "파이프라인 후반부 자동화: PromptSet(2단계 산출물, AI가 이미 작성)의 각 항목에 대해 3단계 후보를 생성하고, " +
-                      "autoSelect=\"first\"(기본)면 가장 낮은 시드 후보를 확정한 뒤 4단계로 대상에 일괄 적용합니다. " +
-                      "autoSelect=\"none\"이면 후보만 생성하고 pendingSelections로 반환합니다 " +
+        Description = "파이프라인 후반부 자동화 Job을 시작합니다 (비동기, 완료까지 기다리지 않음). PromptSet(2단계 산출물, " +
+                      "AI가 이미 작성)의 각 항목에 대해 3단계 후보를 생성하고, autoSelect=\"first\"(기본)면 가장 낮은 시드 " +
+                      "후보를 확정한 뒤 4단계로 대상에 일괄 적용합니다. " +
+                      "autoSelect=\"none\"이면 후보만 생성하고 확정/적용은 하지 않으며, 후보 목록을 pendingSelections에 담습니다 " +
                       "(이후 mcptools_select_candidate + mcptools_apply_asset). " +
                       "1·2단계는 AI 중립 설계상 사전에 AI로 작성되어 있어야 합니다. " +
                       "파라미터: promptSetPath(필수), autoSelect(\"first\"|\"none\", 기본 \"first\"), workflowName(선택). " +
-                      "반환 data: { promptSetPath, assetListPath, pendingSelections, applied, failed }. " +
-                      "주의: 생성 완료까지 에디터가 블로킹됩니다.")]
+                      "반환 data: { status:\"started\", promptSetPath, assetListPath, itemCount, timeoutSeconds, statusNote }. " +
+                      "진행 상황과 최종 결과(pendingSelections/applied/failed)는 mcptools_status의 pipeline 블록으로 폴링하세요. " +
+                      "Job은 동시에 1개만 실행할 수 있습니다.")]
     public static class McpToolsRunPipelineTool
     {
         /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
@@ -422,7 +425,7 @@ namespace MCPTools.Editor
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
         /// <param name="params">파라미터 JSON 객체 (promptSetPath, autoSelect, workflowName).</param>
-        /// <returns>{"success":bool,"message":string,"data":{promptSetPath,assetListPath,pendingSelections,applied,failed}} 형태의 응답 객체.</returns>
+        /// <returns>{"success":bool,"message":string,"data":{status,promptSetPath,assetListPath,itemCount,timeoutSeconds}} 형태의 응답 객체.</returns>
         public static object HandleCommand(JObject @params)
         {
             return McpForUnityAdapter.Handle("mcptools_run_pipeline", @params);
@@ -431,17 +434,21 @@ namespace MCPTools.Editor
 
     /// <summary>
     /// 파이프라인 진단 도구(mcptools_status)를 MCP for Unity에 노출합니다.
-    /// 설정값·산출물 현황·버전 등 진단 정보를 반환합니다.
+    /// 설정값·산출물 현황·버전과 mcptools_run_pipeline Job의 진행 상태(pipeline 블록)를 반환합니다.
     /// </summary>
     [McpForUnityTool("mcptools_status",
         Description = "MCP Tools 진단: 설정값(ComfyUI/브리지 주소, 경로, 후보 개수), 산출물 현황(AssetList/PromptSet 개수·최신 파일, " +
-                      "3_Confirmed/Images·Audio 및 3_Candidates 개수, 확정 항목 수), 버전·Unity 버전을 반환합니다. " +
+                      "3_Confirmed/Images·Audio 및 3_Candidates 개수, 확정 항목 수), 버전·Unity 버전, " +
+                      "그리고 mcptools_run_pipeline Job의 진행 상태를 반환합니다. " +
+                      "pipeline: { status: \"idle\"|\"running\"|\"completed\"|\"failed\", message, phase, promptSetPath, assetListPath, " +
+                      "itemCount, currentIndex, currentItemId, elapsedSeconds, pendingSelections, applied, failed } — " +
+                      "run_pipeline의 완료 여부와 결과를 이 블록으로 폴링하세요. " +
                       "서버 실시간 연결 확인은 하지 않습니다(3단계 창/브리지 /health 참조). 파라미터: 없음.")]
     public static class McpToolsStatusTool
     {
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
         /// <param name="params">파라미터 JSON 객체 (사용하지 않음).</param>
-        /// <returns>{"success":bool,"message":string,"data":{version,unityVersion,config,outputs,serverHealthNote}} 형태의 응답 객체.</returns>
+        /// <returns>{"success":bool,"message":string,"data":{version,unityVersion,config,outputs,pipeline,serverHealthNote}} 형태의 응답 객체.</returns>
         public static object HandleCommand(JObject @params)
         {
             return McpForUnityAdapter.Handle("mcptools_status", @params);

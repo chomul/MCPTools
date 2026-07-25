@@ -34,6 +34,8 @@ namespace MCPTools.Editor
         /// 확실한 것만 허용한다.
         /// - mcptools_ping: 설정값·버전 문자열만 반환한다.
         /// - mcptools_status: 설정값과 산출물 폴더의 파일 개수를 세어 반환한다 (Directory 열거만 사용).
+        ///   여기에 더해 mcptools_run_pipeline Job의 진행 상태(pipeline 블록)를 메모리에서 읽어 담을 뿐이므로
+        ///   여전히 부작용이 없다. 오히려 Job이 도는 동안 에이전트가 폴링하는 경로라 반드시 허용해야 한다.
         /// - mcptools_list_candidates: 후보 폴더를 열거해 Job 상태와 후보 목록만 반환한다. 생성 Job이
         ///   도는 동안 에이전트가 폴링하는 경로이므로 Play Mode에서도 막지 않는다.
         /// 세 도구 모두 <see cref="MCPToolSettings.GetOrCreate"/>를 거치므로 설정 에셋이 아직 없는

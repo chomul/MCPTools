@@ -26,6 +26,7 @@ if sys.version_info < (3, 7):
     sys.exit(1)
 
 import argparse
+import copy
 import errno
 import json
 import os
@@ -41,7 +42,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # 브리지 서버 자체 버전. /health 응답에 실려 나가며, Unity가 다른 위치·다른 버전의
 # 브리지에 붙었는지 판별하는 데 씁니다. 브리지 API가 바뀌면 함께 올립니다.
 # 0.3.0: Host 헤더 검증 + 요청 본문/count 상한 추가 (동작 제약이 늘어난 minor 상향).
-BRIDGE_VERSION = "0.3.0"
+# 0.4.0: 완료 폴링 지연 축소 + /object_info TTL 캐시 + 워크플로 JSON mtime 캐시.
+#        GET /workflows?refresh=1 로 캐시를 수동 무효화하는 경로가 새로 생겼고(기능 추가),
+#        /object_info 결과가 최대 60초 캐시되어 "지금 막 추가한 모델"이 바로 보이지 않을 수
+#        있으므로(관측 가능한 동작 변화) minor 상향.
+BRIDGE_VERSION = "0.4.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.abspath(__file__)
@@ -91,8 +96,34 @@ MAX_GENERATE_COUNT = 32
 JOBS = {}
 JOBS_LOCK = threading.Lock()
 
-POLL_INTERVAL_SEC = 1.0
+# /history 완료 폴링 간격(초).
+#
+# 근거(Task 8 S4): 이 값은 "ComfyUI가 실제로 끝낸 시각 → 브리지가 완료를 알아채는 시각"의
+# 상한이다. localhost /history는 이미 끝난 prompt의 작은 JSON을 돌려주는 저비용 조회라
+# 간격을 줄여도 ComfyUI 부하가 사실상 늘지 않는다. 0.3초로 두면 감지 지연이 최대 0.3초
+# (평균 0.15초)로, 기존 1.0초 대비 배치당 약 0.85초를 줄이면서 요청 수는 후보 수 × 초당
+# 3.3회 수준에 머문다. 0.25초 미만은 감지 이득이 100ms 미만인 데 비해 요청 수만 늘어
+# 채택하지 않았다.
+POLL_INTERVAL_SEC = 0.3
 JOB_TIMEOUT_SEC = 600.0
+
+# /object_info 응답 캐시 유지 시간(초). 설치된 모델/커스텀 노드 목록은 ComfyUI를 재시작하거나
+# 파일을 추가하기 전까지 바뀌지 않으므로 짧은 TTL로 충분하다. 사용자가 ComfyUI에 모델을
+# 추가한 직후라면 최대 이 시간만큼 목록이 낡을 수 있고, 즉시 갱신하려면
+# GET /workflows?refresh=1 또는 POST /free 로 캐시를 비우면 된다.
+OBJECT_INFO_TTL_SEC = 60.0
+
+# _OBJECT_INFO_CACHE = (조회 시각(monotonic), object_info dict) 또는 None.
+# 실패(None) 응답은 캐시하지 않는다 — ComfyUI 미기동 상태에서 comfyReachable=false가
+# 캐시 때문에 고착되면 ComfyUI를 켠 뒤에도 최대 TTL 동안 미연결로 보이기 때문이다.
+_OBJECT_INFO_CACHE = None
+_OBJECT_INFO_LOCK = threading.Lock()
+
+# 워크플로 JSON 파싱 결과 캐시: 절대 경로 -> ((st_mtime_ns, st_size), 파싱된 dict).
+# mtime/size 확인은 매 호출마다 하고 파싱만 건너뛰므로, 사용자가 JSON을 편집하면 즉시 반영된다.
+# 캐시에 담긴 dict는 절대 그대로 반환하지 않는다 (load_workflow가 deepcopy 사본을 준다).
+_WORKFLOW_CACHE = {}
+_WORKFLOW_CACHE_LOCK = threading.Lock()
 
 # 이 길이 이상의 경로는 Windows 기본 최대 경로 길이(MAX_PATH = 260자)에 근접한 것으로 보고
 # 파일 열기 실패 시 "경로가 너무 길다"는 안내를 덧붙입니다. UPM(git URL) 설치본은
@@ -206,6 +237,38 @@ def list_workflow_names():
     return sorted(names)
 
 
+def invalidate_workflow_cache():
+    """워크플로 JSON 파싱 캐시를 비웁니다 (수동 새로고침 경로에서 호출)."""
+    with _WORKFLOW_CACHE_LOCK:
+        _WORKFLOW_CACHE.clear()
+
+
+def read_workflow_json(path):
+    """워크플로 JSON을 읽되, 파일이 그대로면 이전 파싱 결과를 재사용합니다.
+
+    반환값은 **캐시가 보유한 원본 객체**이므로 호출 측이 변형해서는 안 됩니다.
+    외부에는 load_workflow()가 deepcopy 사본만 내보냅니다.
+
+    파일 수정 감지는 (st_mtime_ns, st_size)로 하며 매 호출마다 stat을 확인합니다.
+    stat이 실패하면 캐시를 쓰지 않고 항상 다시 읽습니다(기존 예외 흐름 유지).
+    """
+    try:
+        info = os.stat(path)
+        stamp = (info.st_mtime_ns, info.st_size)
+    except OSError:
+        return read_json_file(path)
+
+    with _WORKFLOW_CACHE_LOCK:
+        entry = _WORKFLOW_CACHE.get(path)
+        if entry is not None and entry[0] == stamp:
+            return entry[1]
+
+    parsed = read_json_file(path)
+    with _WORKFLOW_CACHE_LOCK:
+        _WORKFLOW_CACHE[path] = (stamp, parsed)
+    return parsed
+
+
 def load_workflow(name):
     """원본 워크플로 JSON을 그대로 로드합니다 (구조 변경 없음).
 
@@ -214,6 +277,10 @@ def load_workflow(name):
     파일이 보이지 않거나 열리지 않을 때, 경로 길이가 임계값을 넘으면
     "파일 없음"과 구분되도록 경로 길이 안내를 메시지에 덧붙입니다
     (Windows는 MAX_PATH를 넘는 경로를 오류 대신 "없음"으로 돌려주기도 합니다).
+
+    파싱 결과는 파일 mtime 기준으로 캐시되지만, 호출 측은 이 반환값을 자유롭게
+    변형합니다(apply_variables·set_seed가 노드 inputs를 덮어씀). 따라서 항상
+    deepcopy 사본을 돌려주어 캐시 오염을 원천 차단합니다.
     """
     safe = os.path.basename(name)
     path = ""
@@ -226,7 +293,7 @@ def load_workflow(name):
         path = os.path.join(WORKFLOWS_DIR, safe + ".json")
     if not os.path.isfile(path):
         raise FileNotFoundError("워크플로를 찾을 수 없습니다: %s%s" % (name, path_hint(path)))
-    return read_json_file(path)
+    return copy.deepcopy(read_workflow_json(path))
 
 
 def coerce_value(var_type, value):
@@ -287,15 +354,57 @@ def set_seed(workflow, seed):
     return found
 
 
+def invalidate_object_info_cache():
+    """/object_info 캐시를 비웁니다 (모델/노드를 추가한 뒤 즉시 반영이 필요할 때)."""
+    global _OBJECT_INFO_CACHE
+    with _OBJECT_INFO_LOCK:
+        _OBJECT_INFO_CACHE = None
+
+
 def fetch_object_info():
-    """ComfyUI /object_info 전체를 조회합니다. 실패 시 None을 반환합니다."""
+    """ComfyUI /object_info 전체를 조회합니다. 실패 시 None을 반환합니다.
+
+    성공 응답은 OBJECT_INFO_TTL_SEC 동안 캐시합니다. 커스텀 노드가 많은 환경에서
+    이 응답은 수 MB급이고 후보 생성 1회에 /workflows·/preflight가 각각 한 번씩
+    조회하므로, 캐시가 없으면 생성마다 수 MB를 두 번 다시 받습니다.
+
+    실패(None)는 캐시하지 않습니다 — ComfyUI 미기동 시 comfyReachable=false가
+    TTL 동안 고착되면 ComfyUI를 켠 직후에도 계속 미연결로 보이기 때문입니다.
+
+    반대 방향도 막아야 합니다. 캐시가 살아 있는 동안 ComfyUI가 내려가면 "성공 캐시"
+    때문에 comfyReachable=true가 최대 TTL 동안 유지되어 기존 동작과 어긋납니다.
+    그래서 캐시를 내주기 전에 /system_stats로 생존만 확인합니다(수 KB, localhost 수 ms).
+    수 MB짜리 /object_info 재조회는 여전히 건너뛰므로 절감 효과는 그대로입니다.
+
+    스레드 안전: 락은 캐시 읽기/쓰기 구간에만 걸고 HTTP 조회는 락 밖에서 합니다.
+    캐시 미스가 동시에 발생하면 조회가 중복될 수 있지만(드묾), 락을 잡은 채 조회하면
+    ComfyUI 미응답 시 최대 15초 동안 다른 모든 요청(/health·/job 폴링 포함)이 함께
+    막히므로 중복 방지보다 응답성을 택했습니다. 중복 조회가 나도 결과는 동일하고
+    마지막 성공값이 캐시에 남습니다.
+    """
+    global _OBJECT_INFO_CACHE
+
+    now = time.monotonic()
+    with _OBJECT_INFO_LOCK:
+        cached = _OBJECT_INFO_CACHE
+    if cached is not None and now - cached[0] < OBJECT_INFO_TTL_SEC:
+        if comfy_alive():
+            return cached[1]
+        # ComfyUI가 내려갔다 — 캐시를 버리고 미연결(None)로 보고한다.
+        invalidate_object_info_cache()
+        return None
+
     try:
         status, body, _ = comfy_request("/object_info", timeout=15)
         if status != 200:
             return None
-        return json.loads(body.decode("utf-8"))
+        parsed = json.loads(body.decode("utf-8"))
     except Exception:
         return None
+
+    with _OBJECT_INFO_LOCK:
+        _OBJECT_INFO_CACHE = (time.monotonic(), parsed)
+    return parsed
 
 
 def field_options_from_object_info(object_info, class_type, field):
@@ -328,20 +437,18 @@ def field_options_from_object_info(object_info, class_type, field):
     return None
 
 
-def attach_variable_options(name, variables, object_info):
+def attach_variable_options(variables, object_info, workflow):
     """string 변수에 ComfyUI object_info 기반 선택지(options)를 첨부한 사본을 반환합니다.
 
-    ComfyUI 미기동/조회 실패(object_info=None) 또는 선택지가 리스트가 아니면
-    options 키를 생략합니다.
+    ComfyUI 미기동/조회 실패(object_info=None), 워크플로 로드 실패(workflow=None),
+    또는 선택지가 리스트가 아니면 options 키를 생략합니다.
+
+    workflow는 호출 측이 이미 로드한 것을 받습니다 (같은 요청에서 두 번 로드하지 않기 위함).
+    이 함수는 workflow를 읽기만 합니다.
     """
     result = [dict(v) for v in variables]
     string_vars = [v for v in result if v.get("type", "string") == "string"]
-    if not string_vars or object_info is None:
-        return result
-
-    try:
-        workflow = load_workflow(name)
-    except Exception:
+    if not string_vars or object_info is None or workflow is None:
         return result
 
     for var in string_vars:
@@ -490,7 +597,12 @@ def collect_outputs(history_entry):
 # ──────────────────────────── 생성 Job ────────────────────────────
 
 def run_job(job_id, prompt_ids):
-    """백그라운드 스레드: 큐잉된 prompt들의 완료를 /history로 폴링합니다."""
+    """백그라운드 스레드: 큐잉된 prompt들의 완료를 /history로 폴링합니다.
+
+    대기(time.sleep)는 루프 **끝**에서만 합니다. 첫 확인을 즉시 수행해야
+    이미 끝난 prompt(캐시된 결과·초고속 워크플로)를 대기 없이 잡아내고,
+    마지막 prompt가 끝난 직후에도 불필요한 sleep 없이 루프를 빠져나갑니다.
+    """
     start = time.time()
     total = len(prompt_ids)
     pending = dict(prompt_ids)  # prompt_id -> seed
@@ -501,7 +613,6 @@ def run_job(job_id, prompt_ids):
             fail_job(job_id, "생성 대기가 제한 시간(%d초)을 초과했습니다. ComfyUI 부하/모델 로드 상태를 확인하세요."
                      % int(JOB_TIMEOUT_SEC))
             return
-        time.sleep(POLL_INTERVAL_SEC)
 
         for prompt_id in list(pending.keys()):
             try:
@@ -539,6 +650,10 @@ def run_job(job_id, prompt_ids):
                         job["progress"] = (total - len(pending)) / float(total)
                         job["results"] = list(results)
                         job["message"] = "%d/%d 완료" % (total - len(pending), total)
+
+        # 아직 남은 prompt가 있을 때만 쉰다 (마지막 완료 직후의 불필요한 대기 제거).
+        if pending:
+            time.sleep(POLL_INTERVAL_SEC)
 
     with JOBS_LOCK:
         job = JOBS.get(job_id)
@@ -605,6 +720,12 @@ def is_allowed_host_header(value):
         return False
     # 포트 생략(기본 포트 표기)도 허용하고, 명시했다면 실제 서비스 포트와 일치해야 한다.
     return port == "" or port == str(BIND_PORT)
+
+
+def wants_refresh(query):
+    """쿼리 문자열에 refresh=1(또는 true/yes/on)이 있으면 True."""
+    values = urllib.parse.parse_qs(query or "").get("refresh") or []
+    return any(str(v).strip().lower() in ("1", "true", "yes", "on") for v in values)
 
 
 # ──────────────────────────── HTTP 핸들러 ────────────────────────────
@@ -703,20 +824,30 @@ class BridgeHandler(BaseHTTPRequestHandler):
                                 "userDirActive": user_dir_active(), "jobTimeoutSec": JOB_TIMEOUT_SEC,
                                 "scriptPath": SCRIPT_PATH, "version": BRIDGE_VERSION})
             elif path == "/workflows":
+                # ?refresh=1: 캐시를 비우고 다시 조회한다. ComfyUI에 모델·커스텀 노드를 추가한
+                # 직후 TTL을 기다리지 않고 목록을 갱신하는 수동 무효화 경로다.
+                if wants_refresh(parsed.query):
+                    invalidate_object_info_cache()
+                    invalidate_workflow_cache()
                 manifest = load_variables_manifest()
                 # ComfyUI가 살아 있으면 설치된 모델/샘플러 선택지를 변수에 첨부한다 (1회 조회).
                 object_info = fetch_object_info()
                 workflows = []
                 for name in list_workflow_names():
-                    variables = attach_variable_options(name, manifest.get(name, []), object_info)
-                    # ComfyUI 연결 시에만 누락 커스텀 노드를 검증한다. 실패해도 목록
-                    # 응답 자체는 유지한다 (옵션 첨부와 동일한 안전 폴백).
-                    missing_nodes = []
+                    # 워크플로 JSON은 항목당 1회만 로드해 옵션 첨부와 누락 노드 검증이 함께 쓴다
+                    # (두 경로 모두 읽기 전용). ComfyUI 미연결이면 둘 다 검증을 건너뛰므로
+                    # 로드 자체를 하지 않는다. 로드 실패는 목록 응답을 깨지 않고 무시한다
+                    # (기존과 동일한 안전 폴백: options 없음 + missingNodes 빈 목록).
+                    workflow = None
                     if object_info is not None:
                         try:
-                            missing_nodes = compute_missing_nodes(load_workflow(name), object_info)
+                            workflow = load_workflow(name)
                         except Exception:
-                            missing_nodes = []
+                            workflow = None
+                    variables = attach_variable_options(
+                        manifest.get(name, []), object_info, workflow)
+                    missing_nodes = (
+                        compute_missing_nodes(workflow, object_info) if workflow is not None else [])
                     workflows.append({
                         "name": name,
                         "variables": variables,
@@ -914,6 +1045,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
 
     def handle_free(self):
         """ComfyUI POST /free 를 프록시해 로드된 모델을 언로드하고 메모리를 해제합니다."""
+        # 언로드 자체로 설치 목록이 바뀌지는 않지만, /free는 "ComfyUI 상태를 손댔다"는 신호이므로
+        # 이 시점에 캐시를 비워 다음 조회가 최신 목록을 받게 한다 (수동 새로고침 수단 겸용).
+        invalidate_object_info_cache()
         body = json.dumps({"unload_models": True, "free_memory": True}).encode("utf-8")
         try:
             status, resp, _ = comfy_request(

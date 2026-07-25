@@ -38,6 +38,19 @@ namespace MCPTools.Editor
 
         /// <summary>공통 셀 높이(px).</summary>
         public int cellHeight;
+
+        /// <summary>
+        /// 같은 이름의 시트가 이미 있어 <b>덮어썼으면</b> true입니다.
+        /// (비대화형 경로에서는 확인 없이 덮어쓰므로, 호출자는 이 값을 응답·안내에 그대로 실어야 합니다)
+        /// </summary>
+        public bool overwroteExisting;
+
+        /// <summary>
+        /// 덮어쓰기 확인 다이얼로그에서 사용자가 취소해 <b>저장·슬라이스를 하지 않았으면</b> true입니다.
+        /// 이때 <see cref="assetPath"/>는 덮어쓰려던 경로이고 프레임 수 등 나머지 필드는 비어 있습니다.
+        /// (대화형 호출자만 볼 수 있는 상태 — 비대화형에서는 항상 false)
+        /// </summary>
+        public bool canceled;
     }
 
     /// <summary>
@@ -281,14 +294,21 @@ namespace MCPTools.Editor
         /// true면 각 스프라이트의 피벗을 셀 중앙이 아니라 콘텐츠의 발밑(수평 중앙 + 최하단 전경 픽셀)에 둡니다.
         /// walk/run 등 이동 애니메이션에서 발이 한 지점에 고정돼 흔들림이 줄어듭니다. 기본 false(셀 중앙).
         /// </param>
-        /// <returns>임포트 결과.</returns>
+        /// <param name="interactive">
+        /// 같은 이름의 시트를 덮어쓸 때 모달 다이얼로그로 확인받을지 여부입니다 (MCP 호출 시 false — 기본값).
+        /// false면 확인 없이 덮어쓰고 <see cref="SpriteSheetImportResult.overwroteExisting"/>로만 알립니다.
+        /// </param>
+        /// <returns>
+        /// 임포트 결과. <paramref name="interactive"/>=true에서 사용자가 덮어쓰기를 취소하면
+        /// <see cref="SpriteSheetImportResult.canceled"/>=true인 결과가 돌아오고 아무것도 저장되지 않습니다.
+        /// </returns>
         /// <exception cref="InvalidOperationException">
         /// 파일 누락, 이미지 로드 실패, 격자 검출 실패, 행 이름 부족 등 슬라이스 실패 시.
         /// 메시지에 원인과 조치를 포함합니다.
         /// </exception>
         public static SpriteSheetImportResult Import(
             string imagePath, List<SpriteSheetRowDef> rows, bool whiteBackground, bool showProgress = false,
-            bool pivotAtFeet = false)
+            bool pivotAtFeet = false, bool interactive = false)
         {
             if (rows == null || rows.Count == 0)
             {
@@ -337,7 +357,7 @@ namespace MCPTools.Editor
                     "조치: 위 검출 결과에 맞춰 rows에 행(동작명:프레임수)을 추가한 뒤 다시 실행해주세요.");
             }
 
-            SpriteSheetImportResult result = ApplySlices(detection, pivotAtFeet, showProgress);
+            SpriteSheetImportResult result = ApplySlices(detection, pivotAtFeet, showProgress, interactive);
 
             // 기대 구성(행 정의)과의 차이는 정보로만 기록한다.
             var expected = new int[rows.Count];
@@ -346,7 +366,8 @@ namespace MCPTools.Editor
                 expected[r] = rows[r].frameCount;
             }
 
-            bool differs = result.rowCount != rows.Count;
+            // 덮어쓰기 취소로 아무것도 저장하지 않은 경우엔 "검출 구성과 다름"을 표시하지 않는다.
+            bool differs = !result.canceled && result.rowCount != rows.Count;
             if (!differs)
             {
                 for (int r = 0; r < result.framesPerRow.Length; r++)
@@ -457,9 +478,14 @@ namespace MCPTools.Editor
         private static SpriteSheetDetection DetectGrid(
             Color32[] pixels, int width, int height, string fullPath)
         {
-            // 격자선 직접 검출: 배경 제거는 알파만 바꾸므로(RGB 보존) 격자선 RGB는 그대로 남아 있음
-            List<int> xBounds = DetectGridBoundaries(pixels, width, height, true);
-            List<int> yBounds = DetectGridBoundaries(pixels, width, height, false);
+            // 격자선 직접 검출: 배경 제거는 알파만 바꾸므로(RGB 보존) 격자선 RGB는 그대로 남아 있음.
+            // 열/행 카운트를 한 번의 픽셀 순회에서 함께 누적하고(C24), 경계 추출만 축별로 나눈다.
+            var lineCountX = new int[width];
+            var lineCountY = new int[height];
+            CountGridLinePixels(pixels, width, height, lineCountX, lineCountY);
+
+            List<int> xBounds = ExtractGridBoundaries(lineCountX, width, height);
+            List<int> yBounds = ExtractGridBoundaries(lineCountY, height, width);
             if (xBounds == null || yBounds == null)
             {
                 return null;
@@ -574,18 +600,54 @@ namespace MCPTools.Editor
         /// true면 각 스프라이트의 피벗을 셀 중앙이 아니라 콘텐츠의 발밑(수평 중앙 + 최하단 전경 픽셀)에 둡니다.
         /// </param>
         /// <param name="showProgress">에디터 진행률 표시 여부 (MCP 호출 시 false 권장).</param>
-        /// <returns>임포트 결과. 기대 구성 필드(<c>expectedRowCount</c> 등)는 채우지 않습니다.</returns>
+        /// <param name="interactive">
+        /// 같은 이름의 시트가 이미 있을 때 모달 다이얼로그로 덮어쓸지 확인받을지 여부입니다
+        /// (MCP·파이프라인 등 비대화형 호출은 false — 기본값. 모달이 뜨면 에디터가 잠깁니다).
+        /// true에서 사용자가 취소하면 저장·슬라이스를 하지 않고
+        /// <see cref="SpriteSheetImportResult.canceled"/>=true인 결과를 돌려줍니다.
+        /// false면 확인 없이 덮어쓰고 <see cref="SpriteSheetImportResult.overwroteExisting"/>로만 알립니다.
+        /// </param>
+        /// <returns>
+        /// 임포트 결과. 기대 구성 필드(<c>expectedRowCount</c> 등)는 채우지 않습니다.
+        /// 덮어쓰기를 취소했으면 <see cref="SpriteSheetImportResult.canceled"/>=true이고
+        /// <see cref="SpriteSheetImportResult.assetPath"/>는 덮어쓰려던 경로입니다.
+        /// </returns>
         /// <exception cref="InvalidOperationException">
         /// 검출 결과가 없거나, 이름이 빈 행·중복 이름이 있거나, 포함된 프레임이 하나도 없을 때.
         /// 메시지에 원인과 조치를 포함합니다.
         /// </exception>
         public static SpriteSheetImportResult ApplySlices(
-            SpriteSheetDetection detection, bool pivotAtFeet = false, bool showProgress = false)
+            SpriteSheetDetection detection, bool pivotAtFeet = false, bool showProgress = false,
+            bool interactive = false)
         {
             string problem = ValidateForApply(detection);
             if (problem != null)
             {
                 throw new InvalidOperationException(problem);
+            }
+
+            // 덮어쓰기 확인은 진행률 표시·픽셀 처리를 시작하기 전에 끝낸다
+            // (진행률 바가 떠 있는 상태로 모달을 띄우지 않기 위해).
+            string targetPath = ResolveSheetAssetPath(
+                Path.GetFileNameWithoutExtension(detection.sourcePath));
+            bool overwriting = File.Exists(Path.GetFullPath(targetPath));
+            if (overwriting && interactive && !EditorUtility.DisplayDialog(
+                    "시트 덮어쓰기 확인",
+                    $"같은 이름의 시트가 이미 있습니다:\n{targetPath}\n\n" +
+                    "덮어쓰면 기존 시트 이미지와 그 슬라이스 설정이 이번 결과로 대체됩니다.\n" +
+                    "계속할까요?",
+                    "덮어쓰기", "취소"))
+            {
+                return new SpriteSheetImportResult
+                {
+                    assetPath = targetPath,
+                    framesPerRow = new int[0],
+                    rowActions = new string[0],
+                    expectedFramesPerRow = new int[0],
+                    cellWidth = detection.cellWidth,
+                    cellHeight = detection.cellHeight,
+                    canceled = true
+                };
             }
 
             try
@@ -671,7 +733,9 @@ namespace MCPTools.Editor
                     expectedFramesPerRow = new int[0],
                     usedDetectedLayout = false,
                     cellWidth = detection.cellWidth,
-                    cellHeight = detection.cellHeight
+                    cellHeight = detection.cellHeight,
+                    overwroteExisting = overwriting,
+                    canceled = false
                 };
             }
             finally
@@ -837,16 +901,15 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
-        /// AI가 그린 격자선을 직접 검출해 셀 경계 좌표(오름차순, 시작 0·끝 length 포함)를 만듭니다.
-        /// 격자선 후보 픽셀(무채색·비순백·비암부)이 교차 방향 길이의 <see cref="GridLineSpanRatio"/> 이상을 채우는
-        /// 열/행의 연속 run 중앙을 경계로 삼습니다. 격자선을 하나도 못 찾으면 null을 반환합니다.
+        /// 격자선 후보 픽셀(무채색·비순백·비암부)의 개수를 열별·행별로 <b>한 번의 순회에서 함께</b> 셉니다.
+        /// (세로선·가로선 검출이 같은 판정식으로 같은 픽셀을 두 번 훑던 것을 1회로 합친 것 — 판정식은 동일)
+        /// 카운트는 정수라 누적 순서가 결과에 영향을 주지 않습니다.
         /// </summary>
-        /// <param name="vertical">true면 세로 격자선(열 경계), false면 가로 격자선(행 경계)을 검출합니다.</param>
-        private static List<int> DetectGridBoundaries(Color32[] pixels, int width, int height, bool vertical)
+        /// <param name="lineCountX">열별(x) 후보 픽셀 수. 길이 = width.</param>
+        /// <param name="lineCountY">행별(y) 후보 픽셀 수. 길이 = height.</param>
+        private static void CountGridLinePixels(
+            Color32[] pixels, int width, int height, int[] lineCountX, int[] lineCountY)
         {
-            int lineLen = vertical ? width : height;   // 경계를 찍는 축
-            int crossLen = vertical ? height : width;   // 선이 가로지르는 축
-            var lineCount = new int[lineLen];
             for (int y = 0; y < height; y++)
             {
                 int rowIdx = y * width;
@@ -857,11 +920,23 @@ namespace MCPTools.Editor
                     int mn = Mathf.Min(c.r, Mathf.Min(c.g, c.b));
                     if (mx - mn <= GridLineMaxSaturation && mx < GridLineMaxChannel && mn > GridLineMinChannel)
                     {
-                        lineCount[vertical ? x : y]++;
+                        lineCountX[x]++;
+                        lineCountY[y]++;
                     }
                 }
             }
+        }
 
+        /// <summary>
+        /// AI가 그린 격자선의 열별/행별 카운트에서 셀 경계 좌표(오름차순, 시작 0·끝 lineLen 포함)를 만듭니다.
+        /// 격자선 후보 픽셀이 교차 방향 길이의 <see cref="GridLineSpanRatio"/> 이상을 채우는
+        /// 열/행의 연속 run 중앙을 경계로 삼습니다. 격자선을 하나도 못 찾으면 null을 반환합니다.
+        /// </summary>
+        /// <param name="lineCount">경계를 찍는 축의 격자선 후보 픽셀 수 (<see cref="CountGridLinePixels"/> 결과).</param>
+        /// <param name="lineLen">경계를 찍는 축의 길이 (열 경계면 width, 행 경계면 height).</param>
+        /// <param name="crossLen">선이 가로지르는 축의 길이 (열 경계면 height, 행 경계면 width).</param>
+        private static List<int> ExtractGridBoundaries(int[] lineCount, int lineLen, int crossLen)
+        {
             int minSpan = Mathf.Max(1, (int)(crossLen * GridLineSpanRatio));
             var boundaries = new List<int>();
             int runStart = -1;
@@ -1299,36 +1374,7 @@ namespace MCPTools.Editor
 
             // 1) 침식: 제거 픽셀 중 체비쇼프 거리 K 이내((2K+1)x(2K+1) 윈도, 경계 밖 무시)에
             //    전경 픽셀이 하나라도 있으면 침식 마스크에서 제외
-            var eroded = new bool[removed.Length];
-            for (int y = 0; y < height; y++)
-            {
-                for (int x = 0; x < width; x++)
-                {
-                    int idx = y * width + x;
-                    if (!removed[idx])
-                    {
-                        continue;
-                    }
-
-                    bool nearForeground = false;
-                    int wyMax = Mathf.Min(height - 1, y + k);
-                    int wxMax = Mathf.Min(width - 1, x + k);
-                    for (int wy = Mathf.Max(0, y - k); wy <= wyMax && !nearForeground; wy++)
-                    {
-                        int row = wy * width;
-                        for (int wx = Mathf.Max(0, x - k); wx <= wxMax; wx++)
-                        {
-                            if (!removed[row + wx])
-                            {
-                                nearForeground = true;
-                                break;
-                            }
-                        }
-                    }
-
-                    eroded[idx] = !nearForeground;
-                }
-            }
+            bool[] eroded = ErodeChebyshev(removed, width, height, k);
 
             // 2) 외곽 도달성: 네 외곽의 침식 픽셀을 시드로 침식 마스크 위 4방향 BFS → reach
             var reach = new bool[removed.Length];
@@ -1418,6 +1464,118 @@ namespace MCPTools.Editor
             }
         }
 
+        /// <summary>
+        /// 마스크를 체비쇼프 거리 <paramref name="k"/>로 침식합니다. 결과 픽셀은
+        /// (2K+1)x(2K+1) 정사각 윈도(이미지 밖은 무시 = 윈도를 잘라냄) 안이 <b>전부</b> 마스크일 때만 true입니다.
+        /// (윈도가 중심 픽셀을 포함하므로 마스크가 아닌 픽셀은 자동으로 false가 됩니다)
+        /// <para>
+        /// 체비쇼프 침식은 분리 가능(separable)하고 경계 잘라내기도 축별로 독립이므로,
+        /// 가로 K-윈도 AND → 세로 K-윈도 AND 2패스로 나눠도 결과가 정확히 같습니다.
+        /// 각 패스는 윈도를 다시 훑지 않고 슬라이딩 카운터로 갱신해 전체 O(N)입니다
+        /// (원래 구현은 픽셀마다 윈도를 재스캔하는 O(N·K²)).
+        /// </para>
+        /// </summary>
+        private static bool[] ErodeChebyshev(bool[] mask, int width, int height, int k)
+        {
+            var eroded = new bool[mask.Length];
+            if (width <= 0 || height <= 0)
+            {
+                return eroded;
+            }
+
+            // 1패스(가로): horizontal[y,x] = x-k..x+k(이미지 안) 구간이 전부 마스크인가.
+            // foreground = 현재 윈도 안의 "마스크가 아닌" 픽셀 수 → 0이면 전부 마스크.
+            var horizontal = new bool[mask.Length];
+            for (int y = 0; y < height; y++)
+            {
+                int row = y * width;
+                int foreground = 0;
+                int lo = 0;
+                int hi = -1;
+                for (int x = 0; x < width; x++)
+                {
+                    int newHi = Mathf.Min(width - 1, x + k);
+                    while (hi < newHi)
+                    {
+                        hi++;
+                        if (!mask[row + hi])
+                        {
+                            foreground++;
+                        }
+                    }
+
+                    int newLo = Mathf.Max(0, x - k);
+                    while (lo < newLo)
+                    {
+                        if (!mask[row + lo])
+                        {
+                            foreground--;
+                        }
+
+                        lo++;
+                    }
+
+                    horizontal[row + x] = foreground == 0;
+                }
+            }
+
+            // 2패스(세로): 열별 카운터를 행 단위로 갱신한다(한 행이 윈도에 들어오고 나갈 때 1회씩).
+            var columnForeground = new int[width];
+            int top = 0;
+            int bottom = -1;
+            for (int y = 0; y < height; y++)
+            {
+                int newBottom = Mathf.Min(height - 1, y + k);
+                while (bottom < newBottom)
+                {
+                    bottom++;
+                    int addRow = bottom * width;
+                    for (int x = 0; x < width; x++)
+                    {
+                        if (!horizontal[addRow + x])
+                        {
+                            columnForeground[x]++;
+                        }
+                    }
+                }
+
+                int newTop = Mathf.Max(0, y - k);
+                while (top < newTop)
+                {
+                    int removeRow = top * width;
+                    for (int x = 0; x < width; x++)
+                    {
+                        if (!horizontal[removeRow + x])
+                        {
+                            columnForeground[x]--;
+                        }
+                    }
+
+                    top++;
+                }
+
+                int rowIdx = y * width;
+                for (int x = 0; x < width; x++)
+                {
+                    eroded[rowIdx + x] = columnForeground[x] == 0;
+                }
+            }
+
+            return eroded;
+        }
+
+        /// <summary>
+        /// 시트가 저장될 Assets/ 기준 경로를 구합니다. (저장 전 덮어쓰기 확인과 실제 저장이
+        /// 같은 이름 규칙을 쓰도록 한 곳에 모아 둔 것 — 파일을 만들지 않습니다)
+        /// </summary>
+        /// <param name="baseName">원본 시트 파일의 확장자 없는 이름.</param>
+        private static string ResolveSheetAssetPath(string baseName)
+        {
+            string folder = MCPToolFolders.SpriteSheetsDir(MCPToolSettings.GetOrCreate());
+            string safeName = string.IsNullOrEmpty(baseName) ? "spritesheet" : baseName;
+            return $"{folder}/{safeName}_sheet.png";
+        }
+
         private static string SaveSheet(Color32[] sheet, int width, int height, string baseName)
         {
             MCPToolSettings settings = MCPToolSettings.GetOrCreate();
@@ -1428,8 +1586,7 @@ namespace MCPTools.Editor
             bool createdFolder = !Directory.Exists(Path.GetFullPath(folder));
             Directory.CreateDirectory(Path.GetFullPath(folder));
 
-            string safeName = string.IsNullOrEmpty(baseName) ? "spritesheet" : baseName;
-            string assetPath = $"{folder}/{safeName}_sheet.png";
+            string assetPath = ResolveSheetAssetPath(baseName);
 
             var texture = new Texture2D(width, height, TextureFormat.RGBA32, false);
             try

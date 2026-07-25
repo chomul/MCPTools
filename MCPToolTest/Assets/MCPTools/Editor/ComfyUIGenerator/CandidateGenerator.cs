@@ -92,6 +92,13 @@ namespace MCPTools.Editor
         /// true면 다이얼로그로 안내한 뒤 <see cref="OperationCanceledException"/>을 던지고,
         /// false면 다이얼로그 없이 원인·조치가 담긴 <see cref="InvalidOperationException"/>만 던집니다.
         /// </param>
+        /// <param name="refreshAssets">
+        /// 생성 완료 후 <see cref="AssetDatabase.Refresh"/>를 호출해 후보 파일을 임포트할지 여부 (기본 true).
+        /// 여러 항목을 연속 생성하는 호출자가 Refresh를 1회로 모으려면 false를 넘깁니다.
+        /// <b>false로 넘긴 호출자는 반드시 나중에 직접 <see cref="AssetDatabase.Refresh"/>를 호출해야 합니다</b> —
+        /// 그러지 않으면 반환된 경로의 후보 파일이 AssetDatabase에 등록되지 않아
+        /// <see cref="ConfirmCandidate"/>의 임포트 설정이나 미리보기 로드가 실패합니다.
+        /// </param>
         /// <param name="progress">0~1 전체 진행률 콜백.</param>
         /// <param name="ct">취소 토큰.</param>
         /// <returns>생성된 후보 목록 (경로 + 시드).</returns>
@@ -102,6 +109,7 @@ namespace MCPTools.Editor
         public static async Task<List<CandidateInfo>> GenerateAsync(
             MCPToolSettings settings, PromptItem item, string workflowName,
             Dictionary<string, object> variables, long? baseSeed, bool interactive = false,
+            bool refreshAssets = true,
             IProgress<float> progress = null, CancellationToken ct = default)
         {
             if (settings == null)
@@ -187,6 +195,22 @@ namespace MCPTools.Editor
                 string jobId = await client.GenerateAsync(workflow, mergedVariables, count, baseSeed, ct);
 
                 // 브리지 Job 폴링 (다운로드 몫으로 진행률 90%까지만 보고)
+                //
+                // 폴링 간격: 0.3초에서 시작해 상태가 그대로면 1.5배씩 늘리고 1.5초에서 멈춘다.
+                // - 시작값 0.3초: 브리지의 완료 감지 간격(POLL_INTERVAL_SEC)과 같은 값이라
+                //   두 단이 겹쳐도 실제 완료 → 결과 표시 지연이 최대 0.6초 수준으로 줄어든다
+                //   (기존에는 브리지 1초 + Unity 1초로 최대 2초).
+                // - 상한 1.5초: 모델 로드 등으로 생성이 수 분 걸릴 때 요청이 과하게 쌓이지
+                //   않게 한다. 10분 생성 기준 약 400회로, 고정 0.3초(2,000회)의 1/5이다.
+                // - 진행률이 오르면(이미지 1장 완료) 간격을 초기값으로 되돌린다. 남은 장도
+                //   비슷한 시간에 끝날 가능성이 높으므로, 마지막 장의 완료를 늘어난 간격
+                //   때문에 늦게 잡는 일을 막는다.
+                const float pollInitialSeconds = 0.3f;
+                const float pollMaxSeconds = 1.5f;
+                const float pollBackoffFactor = 1.5f;
+
+                float pollDelaySeconds = pollInitialSeconds;
+                float lastReportedProgress = -1f;
                 BridgeJobStatus job;
                 while (true)
                 {
@@ -204,7 +228,14 @@ namespace MCPTools.Editor
                         break;
                     }
 
-                    await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                    if (job.progress > lastReportedProgress)
+                    {
+                        lastReportedProgress = job.progress;
+                        pollDelaySeconds = pollInitialSeconds;
+                    }
+
+                    await Task.Delay(TimeSpan.FromSeconds(pollDelaySeconds), ct);
+                    pollDelaySeconds = Mathf.Min(pollDelaySeconds * pollBackoffFactor, pollMaxSeconds);
                 }
 
                 // 브리지가 남긴 경고(예: 워크플로에 seed 필드 없음 → 중복 제거로 후보 1개)를 사용자에게 알린다.
@@ -247,7 +278,12 @@ namespace MCPTools.Editor
                 }
             }
 
-            AssetDatabase.Refresh();
+            // refreshAssets=false면 임포트를 호출자에게 맡긴다 (여러 항목 연속 생성 시 Refresh 1회로 모으기 위함).
+            if (refreshAssets)
+            {
+                AssetDatabase.Refresh();
+            }
+
             return results.OrderBy(c => c.seed).ToList();
         }
 

@@ -86,9 +86,10 @@ namespace MCPTools.Editor
             string docsRoot = EditorGUILayout.TextField("Docs 경로", _settings.docsRootPath);
             int candidateCount = EditorGUILayout.IntField("후보 개수", _settings.candidateCount);
             bool unloadAfterBatch = EditorGUILayout.Toggle(
-                new GUIContent("생성 후 모델 언로드",
-                    "생성 완료 후 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
-                    "다음 생성 시 모델을 다시 로드하므로 첫 생성이 느려질 수 있습니다."),
+                new GUIContent("일괄 생성 후 모델 언로드",
+                    "일괄 생성이 끝나면 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
+                    "기본값은 끔(모델 유지)이며, 켜면 다음 생성 때 모델을 다시 로드하느라 " +
+                    "10~40초가 추가될 수 있습니다. VRAM이 부족할 때만 켜세요. (단건 생성에는 적용되지 않습니다.)"),
                 _settings.unloadModelsAfterBatch);
             int ppu = EditorGUILayout.IntField(
                 new GUIContent("Sprite PPU", "확정 시 Sprite 임포트에 적용할 Pixels Per Unit 값입니다."),

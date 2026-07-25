@@ -1675,12 +1675,13 @@ namespace MCPTools.Editor
                 }
             }
 
-            // 생성 완료 후 ComfyUI 모델 언로드 여부 (설정 에셋과 연동)
+            // 일괄 생성 완료 후 ComfyUI 모델 언로드 여부 (설정 에셋과 연동)
             EditorGUI.BeginChangeCheck();
             bool unload = EditorGUILayout.ToggleLeft(
-                new GUIContent("생성 완료 후 모델 언로드 (메모리 확보)",
-                    "생성 완료 후 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
-                    "다음 생성 시 모델을 다시 로드하므로 첫 생성이 느려질 수 있습니다."),
+                new GUIContent("일괄 생성 완료 후 모델 언로드 (VRAM 확보)",
+                    "일괄 생성이 끝나면 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
+                    "기본값은 끔(모델 유지)이며, 켜면 다음 생성 때 모델을 다시 로드하느라 " +
+                    "10~40초가 추가될 수 있습니다. VRAM이 부족할 때만 켜세요. (단건 생성에는 적용되지 않습니다.)"),
                 _settings.unloadModelsAfterBatch);
             if (EditorGUI.EndChangeCheck())
             {
@@ -1692,6 +1693,7 @@ namespace MCPTools.Editor
 
         /// <summary>
         /// 설정이 켜져 있으면 브리지 /free 로 ComfyUI 모델을 언로드합니다.
+        /// 일괄 생성 종료 시에만 호출합니다 — 단건 생성마다 호출하면 다음 회차에 모델 재로드 대기가 붙습니다.
         /// 실패해도 경고 로그만 남기고 생성 흐름에는 영향을 주지 않습니다.
         /// </summary>
         private async Task TryFreeMemoryAsync()
@@ -1970,9 +1972,8 @@ namespace MCPTools.Editor
                     _cancelSource = null;
                 }
 
-                // 생성 시도 후에는 설정에 따라 모델을 언로드한다 (실패해도 생성 흐름에 영향 없음).
-                _ = TryFreeMemoryAsync();
-
+                // 단건 생성 후에는 모델을 언로드하지 않는다 — "후보 4개 생성"을 연속으로 누르는 흐름에서
+                // 회차마다 체크포인트 재로드(10~40초)가 붙기 때문. 언로드는 일괄 생성 종료 시에만 수행한다.
                 Repaint();
             }
         }

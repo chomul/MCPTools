@@ -25,8 +25,21 @@ namespace MCPTools.Editor
         /// </summary>
         private const string UserAssetPath = "Assets/MCPTools.User/MCPToolSettings.asset";
 
+        /// <summary>
+        /// 현재 설정 스키마 버전입니다. 기본값 정책이 바뀌어 기존 에셋을 보정해야 할 때 올립니다.
+        /// v1: <see cref="unloadModelsAfterBatch"/> 기본값을 true → false로 변경(모델 재로드 대기 제거).
+        /// </summary>
+        private const int CurrentSettingsVersion = 1;
+
         /// <summary>설치 루트 계산 결과 캐시 (도메인 리로드마다 재계산).</summary>
         private static string _installRoot;
+
+        /// <summary>
+        /// <see cref="GetOrCreate"/> 결과 캐시입니다 (도메인 리로드마다 초기화되므로 별도 무효화가 필요 없음).
+        /// UnityEngine.Object의 <c>==</c> 연산자 오버로드는 네이티브 객체가 파괴된 경우에도 null과 같다고
+        /// 판정하므로, 사용자가 설정 에셋을 삭제하면 이 캐시는 자동으로 null로 취급되어 재조회됩니다.
+        /// </summary>
+        private static MCPToolSettings _cached;
 
         /// <summary>
         /// MCPTools 폴더의 설치 루트 경로입니다
@@ -118,11 +131,23 @@ namespace MCPTools.Editor
         public bool shutdownBridgeOnEditorQuit = true;
 
         /// <summary>
-        /// 생성(단건/일괄) 완료 후 브리지 /free 로 ComfyUI 모델을 언로드해 메모리를 확보할지 여부입니다.
+        /// 일괄 생성 완료 후 브리지 /free 로 ComfyUI 모델을 언로드해 메모리를 확보할지 여부입니다.
+        /// 기본값은 false(모델을 로드된 채로 유지)입니다 — 연속 생성 시 회차마다 붙는
+        /// 체크포인트 재로드 대기(약 10~40초)를 없애기 위함입니다.
+        /// VRAM이 부족한 환경에서만 켜서 메모리를 확보하고, 대신 다음 생성의 재로드 비용을 감수합니다.
         /// </summary>
-        [Tooltip("생성 완료 후 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
-                 "다음 생성 시 모델을 다시 로드하므로 첫 생성이 느려질 수 있습니다.")]
-        public bool unloadModelsAfterBatch = true;
+        [Tooltip("일괄 생성 완료 후 ComfyUI에 로드된 모델을 언로드해 VRAM/메모리를 확보합니다. " +
+                 "기본값은 끔(모델 유지)이며, 켜면 다음 생성 때 모델을 다시 로드하느라 회차마다 " +
+                 "10~40초가 추가될 수 있습니다. VRAM이 부족할 때만 켜세요.")]
+        public bool unloadModelsAfterBatch = false;
+
+        /// <summary>
+        /// 이 설정 에셋이 만들어진 스키마 버전입니다 (<see cref="CurrentSettingsVersion"/>과 비교).
+        /// 이 필드가 없던 구버전 에셋은 역직렬화 시 0이 되어 <see cref="GetOrCreate"/>의 1회성 마이그레이션 대상이 됩니다.
+        /// 초기값을 0으로 두는 것이 마이그레이션 판정의 근거이므로 초기화 식을 바꾸지 마세요.
+        /// </summary>
+        [SerializeField]
+        private int settingsVersion = 0;
 
         /// <summary>
         /// 설정 에셋을 로드합니다. 프로젝트의 Assets 아래 어디에 있든 기존 설정 에셋을 먼저 찾아 사용하고,
@@ -133,6 +158,14 @@ namespace MCPTools.Editor
         /// <returns>로드되었거나 새로 생성된 <see cref="MCPToolSettings"/> 인스턴스.</returns>
         public static MCPToolSettings GetOrCreate()
         {
+            // 일괄 적용처럼 항목 수만큼 반복 호출되는 경로에서 FindAssets가 되풀이되지 않도록 캐시한다.
+            // UnityEngine.Object의 == 오버로드 덕분에, 에셋이 삭제되어 네이티브 객체가 사라지면
+            // _cached != null 이 false가 되어 아래 조회 경로로 자동 폴백한다(별도 무효화 불필요).
+            if (_cached != null)
+            {
+                return _cached;
+            }
+
             // Packages/에 동봉된 읽기 전용 에셋이 사용자 설정을 가리지 않도록 Assets 범위만 조회한다.
             string[] guids = AssetDatabase.FindAssets("t:MCPToolSettings", new[] { "Assets" });
             if (guids != null && guids.Length > 0)
@@ -155,6 +188,8 @@ namespace MCPTools.Editor
                             string.Join("\n- ", paths));
                     }
 
+                    Migrate(found, foundPath);
+                    _cached = found;
                     return found;
                 }
             }
@@ -164,10 +199,44 @@ namespace MCPTools.Editor
             EnsureFolder(assetPath.Substring(0, slash));
 
             var settings = CreateInstance<MCPToolSettings>();
+
+            // 새 에셋은 처음부터 최신 버전으로 저장해 마이그레이션이 돌지 않게 한다.
+            settings.settingsVersion = CurrentSettingsVersion;
             AssetDatabase.CreateAsset(settings, assetPath);
             AssetDatabase.SaveAssets();
             Debug.Log($"[MCPTools] 설정 에셋을 새로 생성했습니다: {assetPath}");
+            _cached = settings;
             return settings;
+        }
+
+        /// <summary>
+        /// 구버전 설정 에셋을 현재 기본값 정책에 맞게 1회만 보정합니다.
+        /// 보정 후 <see cref="settingsVersion"/>을 올려 저장하므로 같은 에셋에 두 번 실행되지 않습니다.
+        /// </summary>
+        /// <param name="settings">보정 대상 설정 에셋.</param>
+        /// <param name="assetPath">안내 메시지에 표시할 에셋 경로.</param>
+        private static void Migrate(MCPToolSettings settings, string assetPath)
+        {
+            if (settings.settingsVersion >= CurrentSettingsVersion)
+            {
+                return;
+            }
+
+            // v0 → v1: 단건 생성마다 모델을 언로드해 회차당 10~40초가 낭비되던 문제를 없앤다.
+            bool unloadTurnedOff = settings.unloadModelsAfterBatch;
+            settings.unloadModelsAfterBatch = false;
+
+            settings.settingsVersion = CurrentSettingsVersion;
+            EditorUtility.SetDirty(settings);
+            AssetDatabase.SaveAssets();
+
+            if (unloadTurnedOff)
+            {
+                Debug.Log(
+                    $"[MCPTools] 설정 에셋(\"{assetPath}\")의 \"일괄 생성 후 모델 언로드\"를 껐습니다. " +
+                    "연속 생성 시 회차마다 붙던 모델 재로드 대기(약 10~40초)를 없애기 위한 1회 보정입니다. " +
+                    "VRAM이 부족해 다시 켜려면 Tools/MCP/Settings에서 \"일괄 생성 후 모델 언로드\"를 체크하세요.");
+            }
         }
 
         /// <summary>
