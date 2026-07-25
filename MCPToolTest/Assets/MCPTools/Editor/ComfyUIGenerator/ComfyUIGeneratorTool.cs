@@ -122,7 +122,8 @@ namespace MCPTools.Editor
             try
             {
                 List<CandidateInfo> candidates =
-                    await CandidateGenerator.GenerateAsync(settings, item, workflowName, variables, baseSeed);
+                    await CandidateGenerator.GenerateAsync(
+                        settings, item, workflowName, variables, baseSeed, interactive: false);
                 job.Candidates = candidates;
                 job.Status = "completed";
                 job.Message = $"후보 {candidates.Count}개 생성 완료.";

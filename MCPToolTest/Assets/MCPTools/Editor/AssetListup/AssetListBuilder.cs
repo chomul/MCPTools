@@ -138,7 +138,8 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
-        /// 문서를 검증합니다. targetPrefabPath 또는 UI 여부가 미기록된 항목이 있으면 경고 목록을 반환합니다.
+        /// 문서를 검증합니다. targetPrefabPath 또는 UI 여부가 미기록된 항목, 그리고
+        /// 3단계에서 같은 파일명이 되어 서로 덮어쓰게 될 항목 id가 있으면 경고 목록을 반환합니다.
         /// </summary>
         /// <param name="doc">검증할 문서.</param>
         /// <returns>경고 목록 (비어 있으면 저장 가능).</returns>
@@ -179,6 +180,76 @@ namespace MCPTools.Editor
                 {
                     warnings.Add($"{label}: UI 여부가 지정되지 않았습니다.");
                 }
+            }
+
+            // 항목 id는 3단계에서 후보 폴더명·확정본 파일명이 된다. 파일명에 쓸 수 없는 문자가 '_'로 바뀌면서
+            // 서로 다른 id가 같은 이름이 되면 후보·확정본이 조용히 덮어써지므로, 저장은 막지 않고 경고만 남긴다.
+            warnings.AddRange(FindIdCollisionWarnings(doc.items));
+
+            return warnings;
+        }
+
+        /// <summary>
+        /// 3단계 파일명으로 바꿨을 때 서로 충돌하는 항목 id 그룹을 찾아 경고 문구를 만듭니다.
+        /// 파일명 변환 규칙은 실제 저장에 쓰는 규칙(<see cref="CandidateGenerator.PreviewFileNameForId"/>)을
+        /// 그대로 사용해 판정이 어긋나지 않게 합니다.
+        /// </summary>
+        /// <param name="items">검사할 항목 목록.</param>
+        /// <returns>충돌 경고 문구 목록. 충돌이 없으면 빈 목록.</returns>
+        /// <remarks>
+        /// <see cref="Validate"/>가 돌려주는 전체 경고에는 "대상 프리팹 미기록" 같은 흔한 항목이 섞여 있어
+        /// 창에서 그대로 띄우면 소음이 된다. 창은 이 메서드로 <b>충돌 경고만</b> 뽑아 안내한다.
+        /// </remarks>
+        internal static List<string> FindIdCollisionWarnings(List<AssetListItem> items)
+        {
+            var warnings = new List<string>();
+            var groups = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+            var order = new List<string>(); // 경고 순서를 항목 순서로 고정한다.
+
+            foreach (AssetListItem item in items)
+            {
+                // 빈 id는 저장 직전에 자동 부여되므로(item_001 …) 여기서는 검사 대상이 아니다.
+                if (item == null || string.IsNullOrEmpty(item.id))
+                {
+                    continue;
+                }
+
+                string fileName = CandidateGenerator.PreviewFileNameForId(item.id);
+                List<string> ids;
+                if (!groups.TryGetValue(fileName, out ids))
+                {
+                    ids = new List<string>();
+                    groups[fileName] = ids;
+                    order.Add(fileName);
+                }
+
+                ids.Add(item.id);
+            }
+
+            foreach (string fileName in order)
+            {
+                List<string> ids = groups[fileName];
+                if (ids.Count < 2)
+                {
+                    continue;
+                }
+
+                var distinct = new List<string>();
+                foreach (string id in ids)
+                {
+                    if (!distinct.Contains(id))
+                    {
+                        distinct.Add(id);
+                    }
+                }
+
+                string idList = "\"" + string.Join("\", \"", distinct.ToArray()) + "\"";
+                warnings.Add(distinct.Count >= 2
+                    ? $"항목 id {idList}이(가) 같은 파일명(\"{fileName}\")으로 저장됩니다. " +
+                      "3단계 후보·확정본이 서로 덮어써지므로 id를 파일명에 쓸 수 있는 " +
+                      "문자(영문·숫자·_·-)로 구분해주세요."
+                    : $"항목 id {idList}이(가) {ids.Count}번 중복 사용됐습니다. " +
+                      "3단계 후보·확정본이 서로 덮어써지므로 항목마다 다른 id를 지정해주세요.");
             }
 
             return warnings;

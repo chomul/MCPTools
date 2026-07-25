@@ -26,6 +26,30 @@ namespace MCPTools.Editor
 
         private static readonly Dictionary<string, ToolEntry> Tools = new Dictionary<string, ToolEntry>();
 
+        /// <summary>
+        /// Play Mode·컴파일/임포트 중에도 실행을 허용하는 도구 이름입니다 (<see cref="GetBlockedReason"/> 화이트리스트).
+        ///
+        /// 허용 기준: 디스크·에셋에 아무것도 쓰지 않고 async 작업도 시작하지 않는 진단/폴링 도구만 넣는다.
+        /// 프로젝트를 읽기만 해도 컴파일·임포트 중에는 AssetDatabase 상태가 불안정하므로 "쓰기 없음"이
+        /// 확실한 것만 허용한다.
+        /// - mcptools_ping: 설정값·버전 문자열만 반환한다.
+        /// - mcptools_status: 설정값과 산출물 폴더의 파일 개수를 세어 반환한다 (Directory 열거만 사용).
+        /// - mcptools_list_candidates: 후보 폴더를 열거해 Job 상태와 후보 목록만 반환한다. 생성 Job이
+        ///   도는 동안 에이전트가 폴링하는 경로이므로 Play Mode에서도 막지 않는다.
+        /// 세 도구 모두 <see cref="MCPToolSettings.GetOrCreate"/>를 거치므로 설정 에셋이 아직 없는
+        /// 프로젝트에서 최초 1회만 설정 에셋을 만든다(도메인 리로드를 유발하지 않는 부트스트랩).
+        ///
+        /// 나머지 12개 도구는 파일 저장·에셋 임포트·프리팹 저장·씬 열기·async 생성 시작 중 하나 이상을
+        /// 수행하므로 화이트리스트에 넣지 않는다 (mcptools_prompt_scan은 파일 읽기만 하지만,
+        /// 창의 스캔 버튼과 판정을 맞추기 위해 함께 차단한다).
+        /// </summary>
+        private static readonly HashSet<string> ReadOnlyTools = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "mcptools_ping",
+            "mcptools_status",
+            "mcptools_list_candidates"
+        };
+
         static McpToolRegistry()
         {
             Register(
@@ -73,6 +97,42 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
+        /// 지금 도구를 실행하면 안 되는 사유(Play Mode·스크립트 컴파일·에셋 임포트)를 반환합니다.
+        /// 실행해도 되는 상태이거나 <paramref name="toolName"/>이 읽기 전용 화이트리스트에 있으면 null입니다.
+        /// MCP 실행 진입점(<see cref="Execute"/>)과 각 도구 창의 실행 버튼이 같은 판정을 쓰기 위한 공용 헬퍼입니다.
+        /// </summary>
+        /// <param name="toolName">
+        /// 판정할 도구 이름. 화이트리스트 확인과 메시지 말미의 "(도구: ...)" 표기에 사용합니다.
+        /// null/빈 문자열이면(창에서 호출하는 경우) 화이트리스트를 적용하지 않고 상태만 판정합니다.
+        /// </param>
+        /// <returns>차단 사유와 조치를 담은 메시지. 차단 상태가 아니면 null.</returns>
+        public static string GetBlockedReason(string toolName = null)
+        {
+            if (!string.IsNullOrEmpty(toolName) && ReadOnlyTools.Contains(toolName))
+            {
+                return null;
+            }
+
+            string suffix = string.IsNullOrEmpty(toolName) ? string.Empty : $" (도구: {toolName})";
+
+            // Play Mode 중 AssetDatabase.Refresh()는 도메인 리로드를 유발해 진행 중인 async 생성과
+            // 플레이 세션을 함께 끊을 수 있다. 재생 진입 예약(isPlayingOrWillChangePlaymode) 상태도 함께 막는다.
+            if (EditorApplication.isPlaying || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return "에디터가 Play Mode입니다. 재생을 멈춘 뒤 다시 호출해주세요." + suffix;
+            }
+
+            // 컴파일·임포트 중에는 AssetDatabase 상태가 불안정하고, 곧 이어질 도메인 리로드가
+            // 실행 중인 작업을 끊는다.
+            if (EditorApplication.isCompiling || EditorApplication.isUpdating)
+            {
+                return "에디터가 스크립트 컴파일/에셋 임포트 중입니다. 완료된 뒤 다시 호출해주세요." + suffix;
+            }
+
+            return null;
+        }
+
+        /// <summary>
         /// 등록된 도구를 실행하고 결과를 공통 포맷 JSON으로 반환합니다.
         /// 예외는 전파하지 않고 success:false 응답으로 변환합니다.
         /// </summary>
@@ -87,6 +147,14 @@ namespace MCPTools.Editor
                 if (string.IsNullOrEmpty(toolName) || !Tools.TryGetValue(toolName, out entry))
                 {
                     return MakeResult(false, $"등록되지 않은 MCP 도구입니다: \"{toolName}\"", null);
+                }
+
+                // Play Mode·컴파일/임포트 중이면 핸들러를 실행하지 않고 사유·조치를 담아 실패로 반환한다
+                // (읽기 전용 도구는 ReadOnlyTools 화이트리스트로 통과).
+                string blockedReason = GetBlockedReason(toolName);
+                if (blockedReason != null)
+                {
+                    return MakeResult(false, blockedReason, null);
                 }
 
                 Dictionary<string, object> parameters = null;

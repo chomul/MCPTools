@@ -96,11 +96,23 @@ namespace MCPTools.Editor
             CancelAiRun();
         }
 
+        /// <summary>
+        /// Play Mode·컴파일/임포트로 실행 버튼을 막아야 하는 사유입니다 (막지 않아도 되면 null).
+        /// MCP 도구와 같은 판정(<see cref="McpToolRegistry.GetBlockedReason"/>)을 쓰며 OnGUI마다 한 번 갱신합니다.
+        /// </summary>
+        private string _blockedReason;
+
         private void OnGUI()
         {
             if (_settings == null)
             {
                 _settings = MCPToolSettings.GetOrCreate();
+            }
+
+            _blockedReason = McpToolRegistry.GetBlockedReason();
+            if (_blockedReason != null)
+            {
+                EditorGUILayout.HelpBox(_blockedReason, MessageType.Warning);
             }
 
             DrawAiSection();
@@ -219,9 +231,16 @@ namespace MCPTools.Editor
                         }
                     }
                 }
-                else if (GUILayout.Button("선택한 AI로 프롬프트 생성", GUILayout.Height(PrimaryButtonHeight)))
+                else
                 {
-                    RunSelectedAi();
+                    // AI 실행은 PromptSet 저장까지 이어지므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_blockedReason != null))
+                    {
+                        if (GUILayout.Button("선택한 AI로 프롬프트 생성", GUILayout.Height(PrimaryButtonHeight)))
+                        {
+                            RunSelectedAi();
+                        }
+                    }
                 }
             }
         }
@@ -246,9 +265,13 @@ namespace MCPTools.Editor
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("템플릿 초안 생성(보조)", GUILayout.Height(ButtonHeight)))
+                    // 템플릿 초안 생성은 목록을 읽어 문서를 만드는 실행 버튼이므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_blockedReason != null))
                     {
-                        RunTemplateBuild();
+                        if (GUILayout.Button("템플릿 초안 생성(보조)", GUILayout.Height(ButtonHeight)))
+                        {
+                            RunTemplateBuild();
+                        }
                     }
 
                     if (GUILayout.Button("AI용 프롬프트 복사", GUILayout.Height(ButtonHeight)))
@@ -471,7 +494,8 @@ namespace MCPTools.Editor
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    using (new EditorGUI.DisabledScope(_document == null))
+                    // [저장]은 PromptSet JSON을 쓰므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_document == null || _blockedReason != null))
                     {
                         if (GUILayout.Button("항목 추가", GUILayout.Height(ButtonHeight)))
                         {

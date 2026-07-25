@@ -169,6 +169,8 @@ namespace MCPTools.Editor
         /// <summary>
         /// 항목과 적용 에셋을 검증합니다: 프리팹 존재, 내부 오브젝트 경로 유효,
         /// 대상 컴포넌트 존재, 적용 에셋 존재·임포트 타입(Sprite/Texture2D/AudioClip) 일치.
+        /// 프리팹 항목은 추가로 대상 프리팹이 프리팹 모드로 열린 채 미저장 변경을 갖고 있는지
+        /// 확인합니다 (<see cref="AddPrefabStageConflictReason"/>).
         /// </summary>
         /// <param name="item">대상 항목.</param>
         /// <param name="assetPath">적용할 에셋 경로 (Assets/ 기준 상대 경로). null이면 확정본 자동 탐색.</param>
@@ -260,6 +262,8 @@ namespace MCPTools.Editor
                         }
                     }
                 }
+
+                AddPrefabStageConflictReason(item.targetPrefabPath, reasons);
             }
 
             // 오디오 임의 필드 대상: 컴포넌트를 찾은 경우 직렬화 필드 존재·타입을 검증한다.
@@ -352,6 +356,52 @@ namespace MCPTools.Editor
             }
 
             return reasons;
+        }
+
+        /// <summary>
+        /// 대상 프리팹이 프리팹 모드(Prefab Stage)로 열려 있고 <b>저장하지 않은 변경이 있는</b> 경우에만
+        /// 실패 사유를 추가합니다.
+        ///
+        /// [막는 이유] 이 상태에서 적용하면 데이터가 사라지지는 않는다. 대신 스테이지의 미저장 변경까지
+        /// 함께 디스크에 기록되어(적용 값이 우선, 스테이지는 그 값으로 갱신되고 isDirty가 false가 된다)
+        /// 사용자가 프리팹 모드에서 실험 중이던 변경을 더 이상 버릴 수 없게 된다.
+        /// MCP 에이전트가 일괄 적용을 돌리면 사용자 동의 없이 이 커밋이 일어나므로 미리 막는다.
+        ///
+        /// [깨끗한 스테이지는 막지 않는 이유] 저장된 상태라면 함께 커밋될 미저장 변경이 없어
+        /// 사용자가 잃을 것이 없다. 잃을 것이 없는데 막으면 불필요한 마찰만 생기므로 통과시킨다.
+        ///
+        /// [한계] PrefabStageUtility.GetCurrentPrefabStage()는 <b>현재 스테이지 하나만</b> 돌려준다.
+        /// 프리팹 안의 프리팹을 파고들어 스테이지 히스토리가 쌓인 경우 상위 스테이지는 잡지 못한다.
+        /// 다만 그 경우에도 데이터 유실은 없으므로 허용 가능한 한계로 둔다.
+        /// </summary>
+        /// <param name="targetPrefabPath">대상 프리팹 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="reasons">실패 사유를 누적할 목록.</param>
+        private static void AddPrefabStageConflictReason(string targetPrefabPath, List<string> reasons)
+        {
+            if (string.IsNullOrEmpty(targetPrefabPath))
+            {
+                return;
+            }
+
+            PrefabStage stage = PrefabStageUtility.GetCurrentPrefabStage();
+            if (stage == null || !stage.scene.isDirty)
+            {
+                return;
+            }
+
+            // 경로는 구분자를 통일하고 대소문자를 무시해 비교한다
+            // (Windows 파일 시스템과 사용자가 적어 넣은 목록 문서의 표기 차이를 흡수).
+            string stagePath = (stage.assetPath ?? string.Empty).Replace('\\', '/');
+            string itemPath = targetPrefabPath.Replace('\\', '/');
+            if (!string.Equals(stagePath, itemPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            reasons.Add(
+                $"대상 프리팹 \"{itemPath}\"이 프리팹 모드로 열려 있고 저장하지 않은 변경이 있습니다. " +
+                "지금 적용하면 그 변경까지 함께 저장되어 되돌릴 수 없습니다. " +
+                "조치: 프리팹 모드에서 저장(Ctrl+S)하거나 변경을 버리고 프리팹 모드를 닫은 뒤 다시 시도해주세요.");
         }
 
         /// <summary>
@@ -508,6 +558,13 @@ namespace MCPTools.Editor
             catch (Exception e)
             {
                 result.message = $"적용 중 오류가 발생했습니다: {e.Message}";
+            }
+
+            // 적용 이력 기록(R3)은 프리팹 적용의 유일한 성공 경로인 이곳에서만 한다.
+            // Apply(단건)·ApplyBatch(일괄)·MCP 도구·파이프라인이 모두 이 함수를 거치므로 한 번의 적용이 한 번만 기록된다.
+            if (result.success)
+            {
+                ApplyHistory.Record(item, result);
             }
 
             return result;
@@ -766,6 +823,15 @@ namespace MCPTools.Editor
             catch (Exception e)
             {
                 result.message = $"적용 중 오류가 발생했습니다: {e.Message}";
+            }
+
+            // 씬 적용의 유일한 성공 경로다 (ApplyToScene·ApplySceneGroup 모두 이 함수를 거친다).
+            // 여기서만 기록해 한 번의 적용이 한 번만 이력에 남게 한다.
+            // 씬 저장은 호출자 몫이므로, 열려 있는 씬을 사용자가 저장하지 않은 채 닫으면 기록만 남을 수 있다
+            // (R3의 "기록만 신뢰" 방침 — 다시 적용하려면 창에서 [선택 적용]).
+            if (result.success)
+            {
+                ApplyHistory.Record(item, result);
             }
 
             return result;

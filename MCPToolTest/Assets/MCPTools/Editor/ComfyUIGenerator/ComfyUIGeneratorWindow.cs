@@ -216,11 +216,23 @@ namespace MCPTools.Editor
             }
         }
 
+        /// <summary>
+        /// Play Mode·컴파일/임포트로 실행 버튼을 막아야 하는 사유입니다 (막지 않아도 되면 null).
+        /// MCP 도구와 같은 판정(<see cref="McpToolRegistry.GetBlockedReason"/>)을 쓰며 OnGUI마다 한 번 갱신합니다.
+        /// </summary>
+        private string _blockedReason;
+
         private void OnGUI()
         {
             if (_settings == null)
             {
                 _settings = MCPToolSettings.GetOrCreate();
+            }
+
+            _blockedReason = McpToolRegistry.GetBlockedReason();
+            if (_blockedReason != null)
+            {
+                EditorGUILayout.HelpBox(_blockedReason, MessageType.Warning);
             }
 
             DrawServerSection();
@@ -1606,7 +1618,8 @@ namespace MCPTools.Editor
                 EditorUtility.SetDirty(_settings);
             }
 
-            using (new EditorGUI.DisabledScope(!canGenerate))
+            // Play Mode·컴파일 중에는 생성(단건/일괄) 전체를 막는다 (R2).
+            using (new EditorGUI.DisabledScope(!canGenerate || _blockedReason != null))
             {
                 int candidateCount = Mathf.Max(1, _settings.candidateCount);
 
@@ -1809,7 +1822,8 @@ namespace MCPTools.Editor
                         string wfName = batchWorkflow != null ? batchWorkflow.name : DefaultWorkflowNameFor(item);
 
                         List<CandidateInfo> generated = await CandidateGenerator.GenerateAsync(
-                            _settings, item, wfName, batchVariables, null, progress, _cancelSource.Token);
+                            _settings, item, wfName, batchVariables, null, interactive: true,
+                            progress: progress, ct: _cancelSource.Token);
                         _candidateCounts[item.id] = generated.Count;
                         done++;
                     }
@@ -1931,7 +1945,7 @@ namespace MCPTools.Editor
                 BridgeWorkflowInfo workflow = SelectedWorkflow();
                 List<CandidateInfo> candidates = await CandidateGenerator.GenerateAsync(
                     _settings, item, workflow != null ? workflow.name : null, variables, null,
-                    progress, _cancelSource.Token);
+                    interactive: true, progress: progress, ct: _cancelSource.Token);
 
                 _candidates = candidates;
                 _candidatesItemId = item.id;
@@ -2063,7 +2077,8 @@ namespace MCPTools.Editor
 
             using (new EditorGUILayout.HorizontalScope())
             {
-                using (new EditorGUI.DisabledScope(_selectedCandidateIndex < 0 || _generating))
+                using (new EditorGUI.DisabledScope(
+                           _selectedCandidateIndex < 0 || _generating || _blockedReason != null))
                 {
                     if (GUILayout.Button("확정", GUILayout.Height(PrimaryButtonHeight)))
                     {

@@ -151,6 +151,10 @@ namespace MCPTools.Editor
                 "4단계 창 열기",
                 () => AssetApplierWindow.Open());
 
+            // 파이프라인 4단계와 구분되는 선택 흐름
+            EditorGUILayout.Space(10f);
+            DrawSpriteSheetSection();
+
             EditorGUILayout.Space(8f);
             EditorGUILayout.HelpBox(
                 "MCP 도구로 후반부(3~4단계)를 자동화하려면 mcptools_run_pipeline(promptSetPath, autoSelect) 를 사용하세요. " +
@@ -187,6 +191,36 @@ namespace MCPTools.Editor
                 if (GUILayout.Button(buttonLabel, GUILayout.Height(24f)))
                 {
                     openAction();
+                }
+            }
+
+            EditorGUILayout.Space(4f);
+        }
+
+        /// <summary>
+        /// 파이프라인 4단계와 별개인 스프라이트 시트 흐름(선택)의 안내와 진입점을 그립니다.
+        /// 산출물이 항목별 확정본과 다른 위치에 저장되므로 단계 상태 배지는 표시하지 않습니다.
+        /// </summary>
+        private void DrawSpriteSheetSection()
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                EditorGUILayout.LabelField("스프라이트 시트 (선택)", EditorStyles.boldLabel);
+                EditorGUILayout.LabelField(
+                    "캐릭터·이펙트처럼 동작별 프레임이 필요한 항목은 ComfyUI 단일 이미지(2~3단계) 대신 이 흐름으로 만듭니다.",
+                    EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField(
+                    "흐름: 시트 프롬프트 생성 → 외부 AI(ChatGPT 이미지 생성 등)로 시트 이미지 생성 → 시트 임포트(배경 제거·격자 검출 후 슬라이스) → " +
+                    "동작별 AnimationClip·AnimatorController 생성 → 4단계 창에서 프리팹에 적용",
+                    EditorStyles.wordWrappedMiniLabel);
+                EditorGUILayout.LabelField(
+                    "산출물 위치가 항목별 확정본과 다릅니다 — 프롬프트는 Docs/SpriteSheetPrompt/, 시트는 Generated/3_Confirmed/SpriteSheets/, " +
+                    "클립은 Generated/3_Confirmed/Animations/{시트이름}/에 저장되며 위 단계 상태 배지에는 반영되지 않습니다.",
+                    EditorStyles.wordWrappedMiniLabel);
+
+                if (GUILayout.Button("Sprite Sheet 창 열기", GUILayout.Height(24f)))
+                {
+                    SpriteSheetPromptWizard.Open();
                 }
             }
 

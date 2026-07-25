@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -31,6 +32,13 @@ namespace MCPTools.Editor
     {
         /// <summary>확정 결과 누적 문서 파일명입니다 (확정본 폴더 바로 아래).</summary>
         public const string ResultsFileName = "GenerationResults.json";
+
+        /// <summary>
+        /// 이 도구가 저장하는 GenerationResults 문서의 스키마 버전입니다. 저장 시 항상 이 값을 기록하며,
+        /// 문서에 <c>schemaVersion</c> 키가 없으면 로드 시 이 버전(1)으로 간주합니다.
+        /// 문서의 기존 키 의미가 바뀌는 변경을 할 때 함께 올립니다.
+        /// </summary>
+        public const int CurrentSchemaVersion = 1;
 
         /// <summary>
         /// 확정 결과 문서를 읽을 경로를 반환합니다. 새 위치(<c>3_Confirmed/</c>)를 우선하고,
@@ -79,14 +87,21 @@ namespace MCPTools.Editor
         /// <param name="workflowName">사용할 워크플로 이름 (null이면 항목 종류별 기본 워크플로).</param>
         /// <param name="variables">덮어쓸 변수 맵 ("nodeId.field" → 값). null 허용.</param>
         /// <param name="baseSeed">기준 시드 (null이면 무작위).</param>
+        /// <param name="interactive">
+        /// 사전 검증 실패를 모달 다이얼로그로 안내할지 여부 (MCP 호출 시 false 권장).
+        /// true면 다이얼로그로 안내한 뒤 <see cref="OperationCanceledException"/>을 던지고,
+        /// false면 다이얼로그 없이 원인·조치가 담긴 <see cref="InvalidOperationException"/>만 던집니다.
+        /// </param>
         /// <param name="progress">0~1 전체 진행률 콜백.</param>
         /// <param name="ct">취소 토큰.</param>
         /// <returns>생성된 후보 목록 (경로 + 시드).</returns>
-        /// <exception cref="InvalidOperationException">브리지/ComfyUI 미기동, 워크플로 거부 등 생성 실패 시.</exception>
-        /// <exception cref="OperationCanceledException">취소된 경우.</exception>
+        /// <exception cref="InvalidOperationException">
+        /// 브리지/ComfyUI 미기동, 워크플로 거부 등 생성 실패 시. interactive=false에서는 사전 검증 실패도 포함합니다.
+        /// </exception>
+        /// <exception cref="OperationCanceledException">취소된 경우 (interactive=true에서는 사전 검증 실패 포함).</exception>
         public static async Task<List<CandidateInfo>> GenerateAsync(
             MCPToolSettings settings, PromptItem item, string workflowName,
-            Dictionary<string, object> variables, long? baseSeed,
+            Dictionary<string, object> variables, long? baseSeed, bool interactive = false,
             IProgress<float> progress = null, CancellationToken ct = default)
         {
             if (settings == null)
@@ -161,7 +176,10 @@ namespace MCPTools.Editor
                 // D1/D2 사전 검증: 모델 파일명·커스텀 노드 누락을 제출 전에 확인한다.
                 // ComfyUI 미연결(comfyReachable=false)이면 검증이 생략된 것이므로 그대로 통과시키고
                 // 기존 연결 오류 경로에 맡긴다 (이중 안내 금지).
-                await RunPreflightAsync(client, workflow, mergedVariables, ct);
+                await RunPreflightAsync(client, workflow, mergedVariables, interactive, ct);
+
+                // 이어지는 ClearFolder가 다른 항목의 후보를 지우는 상황(파일명 충돌)이면 먼저 알린다.
+                WarnIfCandidateFolderTakenByOtherItem(settings, item.id, folder);
 
                 ClearFolder(folder);
                 Directory.CreateDirectory(folder);
@@ -279,14 +297,9 @@ namespace MCPTools.Editor
                 return paths;
             }
 
-            string resultsPath = ResolveResultsPathForRead(settings);
-            if (!File.Exists(resultsPath))
-            {
-                return paths;
-            }
-
-            var doc = MiniJson.Deserialize(File.ReadAllText(resultsPath)) as Dictionary<string, object>;
-            if (doc != null && doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
+            // 문서 읽기·스키마 버전 경고는 LoadResultsDocument 한 곳에 모아 둔다 (읽는 쪽이 갈라지지 않게).
+            Dictionary<string, object> doc = LoadResultsDocument(settings);
+            if (doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
             {
                 foreach (object entry in list)
                 {
@@ -335,6 +348,10 @@ namespace MCPTools.Editor
             Directory.CreateDirectory(destFolder);
 
             string destPath = $"{destFolder}/{SanitizeId(assetItemId)}{ext}";
+
+            // 다른 항목의 확정본을 덮어쓰는 상황(파일명 충돌)이면 알린다. 확정 자체는 막지 않는다.
+            WarnIfConfirmDestinationTaken(settings, assetItemId, destPath);
+
             File.Copy(candidatePath, destPath, true);
             AssetDatabase.ImportAsset(destPath, ImportAssetOptions.ForceUpdate);
 
@@ -353,13 +370,16 @@ namespace MCPTools.Editor
 
         /// <summary>
         /// 생성 제출 전 브리지 /preflight 로 사전 검증합니다 (D1/D2).
-        /// 커스텀 노드 누락 또는 choice 입력 값(모델 파일명·참조 이미지 등) 누락이 있으면
-        /// 원인·조치를 다이얼로그로 안내하고 생성을 중단(OperationCanceledException)합니다.
+        /// 커스텀 노드 누락 또는 choice 입력 값(모델 파일명·참조 이미지 등) 누락이 있으면 생성을 중단합니다.
+        /// interactive=true(창)면 원인·조치를 다이얼로그로 안내한 뒤 OperationCanceledException을 던지고,
+        /// interactive=false(MCP·파이프라인)면 다이얼로그 없이 같은 내용을 담은 InvalidOperationException을 던집니다.
+        /// (비대화형에서 OperationCanceledException을 쓰면 호출부의 취소 처리와 섞여 "사용자 취소"로 오인된다.)
         /// ComfyUI 미연결(comfyReachable=false)이거나 preflight 자체를 수행할 수 없으면
         /// (구버전 브리지 등) 경고 없이 통과시켜 기존 오류 경로에 맡깁니다.
         /// </summary>
         private static async Task RunPreflightAsync(
-            BridgeClient client, string workflow, Dictionary<string, object> variables, CancellationToken ct)
+            BridgeClient client, string workflow, Dictionary<string, object> variables,
+            bool interactive, CancellationToken ct)
         {
             BridgePreflightResult preflight;
             try
@@ -384,6 +404,13 @@ namespace MCPTools.Editor
             }
 
             string message = BuildPreflightFailureMessage(workflow, preflight);
+            if (!interactive)
+            {
+                // MCP·파이프라인 경로: 모달을 띄우면 에디터가 잠기거나(도구) 메인 스레드 위반 예외로
+                // 안내가 변질된다(파이프라인). 원인·조치를 담은 예외만 던져 Job이 failed가 되게 한다.
+                throw new InvalidOperationException(message);
+            }
+
             EditorUtility.DisplayDialog("생성 사전 검증 실패", message, "확인");
             throw new OperationCanceledException(message);
         }
@@ -580,30 +607,22 @@ namespace MCPTools.Editor
             MCPToolSettings settings, string assetItemId, string candidatePath, string outputPath,
             long seed, Dictionary<string, object> meta)
         {
-            string root = MCPToolFolders.ConfirmedRoot(settings);
-            Directory.CreateDirectory(root);
-            string resultsPath = $"{root}/{ResultsFileName}";
-
-            // 새 위치에 아직 문서가 없으면 구 위치의 내용을 이어받아 기록이 끊기지 않게 한다.
-            // (이후 저장은 새 위치로만 이뤄지고, 읽기도 새 위치를 우선한다.)
-            string readPath = ResolveResultsPathForRead(settings);
+            // 이 문서에는 4단계 적용 이력(applications, ApplyHistory)이 형제 키로 함께 들어 있다.
+            // 문서 전체를 읽어 results만 갈아끼우고 나머지 키는 그대로 다시 써야 이력이 날아가지 않는다.
+            Dictionary<string, object> doc = LoadResultsDocument(settings);
 
             var results = new List<object>();
-            if (File.Exists(readPath))
+            if (doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
             {
-                var doc = MiniJson.Deserialize(File.ReadAllText(readPath)) as Dictionary<string, object>;
-                if (doc != null && doc.TryGetValue("results", out object listObj) && listObj is List<object> list)
+                foreach (object entry in list)
                 {
-                    foreach (object entry in list)
+                    var dict = entry as Dictionary<string, object>;
+                    if (dict == null || GetMetaString(dict, "assetItemId") == assetItemId)
                     {
-                        var dict = entry as Dictionary<string, object>;
-                        if (dict == null || GetMetaString(dict, "assetItemId") == assetItemId)
-                        {
-                            continue; // 같은 항목의 기존 기록은 새 기록으로 대체
-                        }
-
-                        results.Add(dict);
+                        continue; // 같은 항목의 기존 기록은 새 기록으로 대체
                     }
+
+                    results.Add(dict);
                 }
             }
 
@@ -619,7 +638,137 @@ namespace MCPTools.Editor
                 { "confirmedAt", DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss") }
             });
 
-            File.WriteAllText(resultsPath, MiniJson.Serialize(new Dictionary<string, object> { { "results", results } }));
+            doc["results"] = results;
+            SaveResultsDocument(settings, doc);
+        }
+
+        /// <summary>
+        /// 확정 결과 문서(<see cref="ResultsFileName"/>)를 통째로 읽습니다.
+        /// 이 문서에는 3단계 확정 기록(<c>results</c>)과 4단계 적용 이력(<c>applications</c>,
+        /// <see cref="ApplyHistory"/>)이 형제 키로 함께 들어가므로, 한쪽을 갱신할 때도 문서 전체를 읽어
+        /// 나머지 키를 그대로 보존한 뒤 <see cref="SaveResultsDocument"/>로 다시 써야 합니다.
+        /// 새 위치(<c>3_Confirmed/</c>)에 문서가 없으면 구 위치의 내용을 이어받습니다.
+        /// </summary>
+        /// <param name="settings">설정 객체.</param>
+        /// <returns>
+        /// 문서 내용. 파일이 없거나 내용이 깨져 있으면 빈 사전을 반환하며 예외를 던지지 않습니다
+        /// (기록 때문에 확정·적용 자체가 실패하지 않게 하기 위함).
+        /// </returns>
+        internal static Dictionary<string, object> LoadResultsDocument(MCPToolSettings settings)
+        {
+            var empty = new Dictionary<string, object>();
+            if (settings == null)
+            {
+                return empty;
+            }
+
+            string readPath = ResolveResultsPathForRead(settings);
+            if (!File.Exists(readPath))
+            {
+                return empty;
+            }
+
+            try
+            {
+                var doc = MiniJson.Deserialize(File.ReadAllText(readPath)) as Dictionary<string, object>;
+                if (doc == null)
+                {
+                    Debug.LogWarning(
+                        $"[MCPTools] {readPath} 를 JSON 문서로 읽지 못해 빈 문서로 진행합니다. " +
+                        "파일이 손상되었다면 이전 확정·적용 기록이 다음 저장 때 사라질 수 있습니다.");
+                    return empty;
+                }
+
+                WarnIfNewerSchemaVersion(doc);
+                return doc;
+            }
+            catch (Exception e)
+            {
+                Debug.LogWarning(
+                    $"[MCPTools] {readPath} 를 읽지 못해 빈 문서로 진행합니다: {e.Message}");
+                return empty;
+            }
+        }
+
+        /// <summary>
+        /// 확정 결과 문서를 새 위치(<c>3_Confirmed/</c>)에 저장합니다.
+        /// <c>schemaVersion</c>은 읽어 온 문서의 값과 <see cref="CurrentSchemaVersion"/> 중 <b>큰 값</b>을 기록합니다.
+        /// (더 새 버전이 저장한 문서를 열어 일부만 갱신한 경우, 나머지 레코드는 원본 그대로 보존되므로
+        /// 문서를 낮은 버전으로 되돌려 라벨링하면 사실과 어긋납니다.)
+        /// </summary>
+        /// <param name="settings">설정 객체.</param>
+        /// <param name="doc"><see cref="LoadResultsDocument"/>로 읽어 일부 키만 갱신한 문서.</param>
+        internal static void SaveResultsDocument(MCPToolSettings settings, Dictionary<string, object> doc)
+        {
+            if (settings == null || doc == null)
+            {
+                throw new ArgumentNullException(settings == null ? nameof(settings) : nameof(doc));
+            }
+
+            string root = MCPToolFolders.ConfirmedRoot(settings);
+            Directory.CreateDirectory(root);
+
+            doc["schemaVersion"] = Math.Max(ReadSchemaVersion(doc), CurrentSchemaVersion);
+            File.WriteAllText($"{root}/{ResultsFileName}", MiniJson.Serialize(doc));
+        }
+
+        /// <summary>
+        /// 문서의 <c>schemaVersion</c> 값을 읽습니다. 키가 없거나 정수로 해석할 수 없으면
+        /// <see cref="CurrentSchemaVersion"/>으로 간주합니다 (구 문서 = 버전 1).
+        /// </summary>
+        /// <param name="doc">확정 결과 문서.</param>
+        /// <returns>문서의 스키마 버전.</returns>
+        internal static long ReadSchemaVersion(Dictionary<string, object> doc)
+        {
+            object value;
+            if (doc == null || !doc.TryGetValue("schemaVersion", out value) || value == null)
+            {
+                // 구 문서(키 없음) → 버전 1로 간주하고 기존과 동일하게 읽는다.
+                return CurrentSchemaVersion;
+            }
+
+            // MiniJson은 JSON 정수를 long, 실수를 double로 돌려준다. 손수 작성한 문서를 위해 문자열도 받아준다.
+            if (value is long asLong)
+            {
+                return asLong;
+            }
+
+            if (value is int asInt)
+            {
+                return asInt;
+            }
+
+            if (value is double asDouble)
+            {
+                return (long)asDouble;
+            }
+
+            long parsed;
+            return long.TryParse(
+                value as string ?? string.Empty,
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out parsed)
+                ? parsed
+                : CurrentSchemaVersion; // 정수로 해석할 수 없는 값 → 버전 정보가 없는 것으로 본다.
+        }
+
+        /// <summary>
+        /// GenerationResults 문서의 <c>schemaVersion</c>이 이 도구가 아는 버전보다 크면 경고만 남깁니다
+        /// (읽기를 막지 않습니다). 키가 없거나 정수로 해석할 수 없는 값이면
+        /// <see cref="CurrentSchemaVersion"/>으로 간주하고 조용히 진행합니다.
+        /// </summary>
+        private static void WarnIfNewerSchemaVersion(Dictionary<string, object> doc)
+        {
+            long version = ReadSchemaVersion(doc);
+            if (version > CurrentSchemaVersion)
+            {
+                Debug.LogWarning(
+                    $"[MCPTools] {ResultsFileName} 문서의 schemaVersion이 {version}입니다 " +
+                    $"(이 도구가 아는 최신 버전: {CurrentSchemaVersion}). " +
+                    "더 새 버전의 MCPTools가 저장한 문서일 수 있어 일부 값이 다르게 해석될 수 있습니다. " +
+                    "읽기는 그대로 계속하며, 결과가 이상하면 MCPTools를 최신 버전으로 업데이트해주세요.");
+            }
         }
 
         /// <summary>후보 폴더의 파일을 전부 삭제합니다 (.meta 포함, 폴더 자체는 유지/재사용).</summary>
@@ -649,6 +798,136 @@ namespace MCPTools.Editor
             }
 
             return assetItemId;
+        }
+
+        /// <summary>
+        /// 항목 id가 후보 폴더명·확정본 파일명으로 바뀐 결과를 미리 계산합니다 (충돌 검사 전용, 파일을 만들지 않습니다).
+        /// </summary>
+        /// <param name="assetItemId">항목 ID.</param>
+        /// <returns>파일명으로 쓸 수 없는 문자를 '_'로 바꾼 문자열. id가 비어 있으면 빈 문자열.</returns>
+        /// <remarks>
+        /// 실제 저장에 쓰는 규칙은 실행 중인 OS의 <see cref="Path.GetInvalidFileNameChars"/>를 따르지만,
+        /// 1단계 산출물 문서는 다른 OS에서도 열리므로 여기서는 <b>현재 OS 기준 금지 문자 ∪ Windows 기준 금지 문자</b>
+        /// 로 판정한다. 어느 OS에서 실행하더라도 실제로 일어날 충돌을 놓치지 않기 위함이며,
+        /// 반대로 Unix에서만 쓰는 프로젝트에서는 실제로는 충돌하지 않는 조합까지 경고할 수 있다
+        /// (경고만 남기고 저장·생성을 막지 않으므로 그쪽을 택한다).
+        /// </remarks>
+        internal static string PreviewFileNameForId(string assetItemId)
+        {
+            if (string.IsNullOrEmpty(assetItemId))
+            {
+                return string.Empty;
+            }
+
+            var sb = new StringBuilder(assetItemId.Length);
+            foreach (char c in assetItemId)
+            {
+                sb.Append(IsInvalidFileNameChar(c) ? '_' : c);
+            }
+
+            return sb.ToString();
+        }
+
+        /// <summary>파일명에 쓸 수 없는 문자인지 판정합니다 (현재 OS 기준 ∪ Windows 기준).</summary>
+        private static bool IsInvalidFileNameChar(char c)
+        {
+            if (c < ' ')
+            {
+                return true; // 제어 문자
+            }
+
+            if ("\"<>|:*?\\/".IndexOf(c) >= 0)
+            {
+                return true; // Windows 기준 금지 문자 (Unix에서는 '/'만 금지)
+            }
+
+            return Array.IndexOf(Path.GetInvalidFileNameChars(), c) >= 0;
+        }
+
+        /// <summary>
+        /// 후보 폴더에 <b>다른 항목</b>의 후보가 들어 있으면 경고합니다 (생성은 그대로 진행).
+        /// 서로 다른 항목 id가 <see cref="SanitizeId"/> 결과로 같은 폴더명이 되면
+        /// 이어지는 <see cref="ClearFolder"/>가 다른 항목의 후보를 지우기 때문입니다.
+        /// 폴더의 후보 메타 JSON에 기록된 원본 assetItemId로만 판정하므로,
+        /// 메타가 없는 구 후보 폴더에서는 조용히 넘어갑니다.
+        /// </summary>
+        private static void WarnIfCandidateFolderTakenByOtherItem(
+            MCPToolSettings settings, string assetItemId, string folder)
+        {
+            Dictionary<string, object> meta = ReadCandidateMeta(settings, assetItemId);
+            string owner = meta != null ? GetMetaString(meta, "assetItemId") : string.Empty;
+            if (string.IsNullOrEmpty(owner) || owner == assetItemId)
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[MCPTools] 항목 \"{assetItemId}\"의 후보 폴더가 항목 \"{owner}\"의 후보 폴더와 같습니다 " +
+                $"(\"{folder}\"). 두 id가 파일명으로 쓸 수 없는 문자 때문에 같은 이름으로 바뀝니다. " +
+                $"이번 생성으로 항목 \"{owner}\"의 기존 후보가 지워집니다. " +
+                "1단계 목록에서 id를 파일명에 쓸 수 있는 문자(영문·숫자·_·-)로 구분해주세요.");
+        }
+
+        /// <summary>
+        /// 확정본 저장 경로에 <b>다른 항목</b>의 파일이 이미 있으면 경고합니다 (확정은 그대로 진행).
+        /// 같은 항목의 재확정(덮어쓰기)은 정상 동작이므로 경고하지 않습니다.
+        /// 소유 항목 판정은 <see cref="GetConfirmedOutputPaths"/>(GenerationResults.json 기록)로 합니다.
+        /// </summary>
+        private static void WarnIfConfirmDestinationTaken(
+            MCPToolSettings settings, string assetItemId, string destPath)
+        {
+            if (!File.Exists(destPath))
+            {
+                return;
+            }
+
+            Dictionary<string, string> confirmed = GetConfirmedOutputPaths(settings);
+
+            string ownPath;
+            if (confirmed.TryGetValue(assetItemId, out ownPath) && IsSamePath(ownPath, destPath))
+            {
+                return; // 같은 항목의 재확정 — 정상 동작
+            }
+
+            var owners = new List<string>();
+            foreach (KeyValuePair<string, string> pair in confirmed)
+            {
+                if (pair.Key != assetItemId && IsSamePath(pair.Value, destPath))
+                {
+                    owners.Add(pair.Key);
+                }
+            }
+
+            if (owners.Count > 0)
+            {
+                string ownerList = string.Join("\", \"", owners.ToArray());
+                Debug.LogWarning(
+                    $"[MCPTools] 항목 \"{assetItemId}\"의 확정본이 항목 \"{ownerList}\"의 " +
+                    $"확정본과 같은 경로(\"{destPath}\")에 저장되어 덮어씁니다. " +
+                    "두 id가 파일명으로 쓸 수 없는 문자 때문에 같은 이름으로 바뀝니다. " +
+                    "1단계 목록에서 id를 파일명에 쓸 수 있는 문자(영문·숫자·_·-)로 구분한 뒤 다시 확정해주세요.");
+                return;
+            }
+
+            Debug.LogWarning(
+                $"[MCPTools] 항목 \"{assetItemId}\"의 확정본 경로(\"{destPath}\")에 확정 기록이 없는 파일이 이미 있어 덮어씁니다. " +
+                $"다른 항목이 만든 파일이거나 {ResultsFileName} 기록이 지워진 경우일 수 있습니다. " +
+                "덮어쓰면 안 되는 파일이었다면 백업 후 항목 id를 바꿔 다시 확정해주세요.");
+        }
+
+        /// <summary>
+        /// 두 에셋 경로가 같은 파일을 가리키는지 비교합니다 (구분자 통일 + 대소문자 무시).
+        /// Windows 파일 시스템 기준으로 대소문자를 무시하므로, 대소문자만 다른 id는 같은 파일로 봅니다.
+        /// </summary>
+        private static bool IsSamePath(string a, string b)
+        {
+            if (string.IsNullOrEmpty(a) || string.IsNullOrEmpty(b))
+            {
+                return false;
+            }
+
+            return string.Equals(
+                a.Replace('\\', '/'), b.Replace('\\', '/'), StringComparison.OrdinalIgnoreCase);
         }
 
         private static string GetMetaString(Dictionary<string, object> dict, string key)

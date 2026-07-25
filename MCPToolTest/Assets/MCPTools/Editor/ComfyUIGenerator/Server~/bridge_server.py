@@ -40,7 +40,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # 브리지 서버 자체 버전. /health 응답에 실려 나가며, Unity가 다른 위치·다른 버전의
 # 브리지에 붙었는지 판별하는 데 씁니다. 브리지 API가 바뀌면 함께 올립니다.
-BRIDGE_VERSION = "0.2.0"
+# 0.3.0: Host 헤더 검증 + 요청 본문/count 상한 추가 (동작 제약이 늘어난 minor 상향).
+BRIDGE_VERSION = "0.3.0"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.abspath(__file__)
@@ -56,8 +57,35 @@ USER_DIR = ""
 COMFY_URL = "http://127.0.0.1:8188"
 CLIENT_ID = uuid.uuid4().hex
 
-# 실제로 바인딩한 주소 (main에서 설정). /shutdown이 로컬 전용인지 판단하는 데 씁니다.
+# 실제로 바인딩한 주소/포트 (main에서 설정). /shutdown이 로컬 전용인지 판단하고,
+# Host 헤더 검증에서 "우리 서비스 포트"를 대조하는 데 씁니다.
 BIND_HOST = "127.0.0.1"
+BIND_PORT = 8189
+
+# Host 헤더 검증 활성화 여부 (main에서 바인딩 주소를 보고 결정).
+#
+# 정책 결정(Task 10 R7):
+#   - 루프백(127.0.0.1/localhost/::1)에 바인딩한 기본 구성에서는 Host 검증을 켠다.
+#     브라우저는 <img>/fetch 같은 단순 요청을 프리플라이트 없이 로컬 주소로 보낼 수 있고,
+#     응답을 못 읽어도 /generate·/free·/shutdown 같은 부작용은 그대로 발생한다.
+#     또 공격자 도메인의 DNS를 127.0.0.1로 돌리는 DNS rebinding에서는 Host 헤더가
+#     공격자 도메인으로 남으므로, Host를 루프백 이름으로 제한하면 둘 다 막힌다.
+#   - --host 로 루프백이 아닌 주소에 바인딩한 경우는 운영자가 "다른 기기에서 접속시키겠다"고
+#     의도적으로 외부 노출한 상황이다. 이때 접속에 쓰일 호스트명(사설 IP·머신 이름·역방향
+#     DNS 이름 등)을 서버가 알 방법이 없어 허용 목록을 만들 수 없다. 정상 사용을 깨뜨리지
+#     않기 위해 Host 검증을 끄고, 대신 기동 시 경고를 1회 출력해 위험을 알린다.
+HOST_CHECK_ENABLED = True
+
+# Host 헤더의 호스트명 부분으로 허용하는 값 (소문자 비교).
+ALLOWED_HOST_NAMES = ("127.0.0.1", "localhost", "::1")
+
+# 요청 본문 상한. 브리지의 JSON 엔드포인트는 워크플로 변수 정도만 받으므로 1 MiB면 충분하다.
+# /upload만 예외로, 참조 이미지 원본을 그대로 실어 보내므로 훨씬 큰 상한을 쓴다.
+MAX_BODY_BYTES = 1048576          # 1 MiB
+MAX_UPLOAD_BODY_BYTES = 67108864  # 64 MiB (/upload 전용)
+
+# /generate 의 count 상한. 오타 하나로 수천 건이 ComfyUI 큐에 들어가는 것을 막는다.
+MAX_GENERATE_COUNT = 32
 
 # jobId -> job dict (락으로 보호)
 JOBS = {}
@@ -529,6 +557,56 @@ def fail_job(job_id, message):
             job["message"] = message
 
 
+# ──────────────────────────── Host 헤더 검증 ────────────────────────────
+
+def split_host_header(value):
+    """Host 헤더를 (호스트명 소문자, 포트 문자열)로 나눕니다.
+
+    `example.com`, `127.0.0.1:8189`, `[::1]:8189`, `[::1]`, `::1` 형태를 모두 다룹니다.
+    포트가 없으면 포트는 빈 문자열입니다. 형식이 깨졌으면 (None, None)을 반환합니다.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None, None
+
+    if text.startswith("["):
+        # IPv6 대괄호 표기: [::1] 또는 [::1]:8189
+        end = text.find("]")
+        if end < 0:
+            return None, None
+        host = text[1:end]
+        rest = text[end + 1:]
+        if not rest:
+            port = ""
+        elif rest.startswith(":"):
+            port = rest[1:]
+        else:
+            return None, None
+    elif text.count(":") == 1:
+        host, _, port = text.partition(":")
+    else:
+        # 콜론이 없으면 포트 없는 호스트명, 2개 이상이면 대괄호 없는 IPv6 리터럴로 본다.
+        host, port = text, ""
+
+    return host.lower(), port
+
+
+def is_loopback_host(host):
+    """바인딩 주소가 루프백인지 판정합니다."""
+    return (host or "").strip().lower().strip("[]") in ALLOWED_HOST_NAMES
+
+
+def is_allowed_host_header(value):
+    """Host 헤더가 이 서버를 가리키는 로컬 주소인지 판정합니다."""
+    host, port = split_host_header(value)
+    if host is None:
+        return False
+    if host not in ALLOWED_HOST_NAMES:
+        return False
+    # 포트 생략(기본 포트 표기)도 허용하고, 명시했다면 실제 서비스 포트와 일치해야 한다.
+    return port == "" or port == str(BIND_PORT)
+
+
 # ──────────────────────────── HTTP 핸들러 ────────────────────────────
 
 class BridgeHandler(BaseHTTPRequestHandler):
@@ -554,9 +632,65 @@ class BridgeHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length") or 0)
         return self.rfile.read(length) if length > 0 else b""
 
+    # ---- 요청 가드 ----
+
+    def check_host_header(self):
+        """Host 헤더가 허용 대상인지 확인하고, 아니면 403을 보낸 뒤 False를 반환합니다.
+
+        브라우저가 보낸 교차 출처 요청(DNS rebinding·단순 요청 CSRF)을 걸러냅니다.
+        Host 헤더가 아예 없는 요청(HTTP/1.0 클라이언트 등)은 브라우저발이 아니므로 통과시킵니다.
+        """
+        if not HOST_CHECK_ENABLED:
+            return True
+
+        value = self.headers.get("Host")
+        if value is None:
+            return True
+
+        if is_allowed_host_header(value):
+            return True
+
+        self.send_error_json(
+            "허용되지 않은 Host 헤더입니다: \"%s\". "
+            "이 브리지 서버는 로컬 전용이라 http://127.0.0.1:%d 또는 http://localhost:%d 로만 "
+            "호출할 수 있습니다(브라우저를 통한 외부 페이지의 호출을 막기 위한 검증입니다). "
+            "Unity의 Tools/MCP/Settings에서 \"브리지 서버 주소\"를 http://127.0.0.1:%d 형식으로 "
+            "맞춰주세요. 다른 기기에서 접속해야 한다면 서버를 --host <주소> 로 실행하세요"
+            "(그 경우 Host 검증은 비활성화됩니다)."
+            % (value, BIND_PORT, BIND_PORT, BIND_PORT), 403)
+        return False
+
+    def check_body_length(self, limit):
+        """Content-Length를 검사해 본문을 읽어도 되는지 확인합니다.
+
+        상한 초과·헤더 누락·숫자가 아닌 값이면 400을 보낸 뒤 None을 반환합니다.
+        (헤더가 없으면 얼마나 읽어야 할지 알 수 없으므로 거부합니다.)
+        """
+        raw = self.headers.get("Content-Length")
+        if raw is None:
+            self.send_error_json(
+                "Content-Length 헤더가 필요합니다. 요청 본문 길이를 명시해 다시 호출해주세요.")
+            return None
+        try:
+            length = int(str(raw).strip())
+        except (TypeError, ValueError):
+            self.send_error_json("Content-Length 헤더가 올바른 숫자가 아닙니다: \"%s\"." % raw)
+            return None
+        if length < 0:
+            self.send_error_json("Content-Length 헤더가 음수입니다: %d." % length)
+            return None
+        if length > limit:
+            self.send_error_json(
+                "요청 본문이 너무 큽니다 (%d바이트, 상한 %d바이트). "
+                "변수 값이나 업로드 파일 크기를 줄여 다시 시도해주세요." % (length, limit))
+            return None
+        return length
+
     # ---- GET ----
 
     def do_GET(self):
+        if not self.check_host_header():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
         try:
@@ -626,8 +760,14 @@ class BridgeHandler(BaseHTTPRequestHandler):
     # ---- POST ----
 
     def do_POST(self):
+        if not self.check_host_header():
+            return
         parsed = urllib.parse.urlparse(self.path)
         path = parsed.path
+        # 본문을 읽기 전에 길이를 먼저 검사한다. /upload만 이미지 원본을 싣기 때문에 상한이 크다.
+        limit = MAX_UPLOAD_BODY_BYTES if path == "/upload" else MAX_BODY_BYTES
+        if self.check_body_length(limit) is None:
+            return
         try:
             if path == "/generate":
                 self.handle_generate()
@@ -656,11 +796,28 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.send_error_json("workflow 파라미터가 필요합니다.")
             return
         variables = req.get("variables") or {}
-        count = max(1, int(req.get("count") or 4))
+
+        # count: 누락/0/None이면 기본값 4로 두되(기존 동작 유지), 상한 초과는 조용히 잘라내지 않고
+        # 400으로 거절한다. 오타 하나로 수천 건이 큐잉되는 것을 사용자가 알아야 하기 때문이다.
+        raw_count = req.get("count")
+        try:
+            count = int(raw_count or 4)
+        except (TypeError, ValueError):
+            self.send_error_json("count는 정수여야 합니다 (요청값: %r)." % (raw_count,))
+            return
+        if count < 1 or count > MAX_GENERATE_COUNT:
+            self.send_error_json(
+                "count는 1~%d 사이여야 합니다 (요청값: %d)." % (MAX_GENERATE_COUNT, count))
+            return
+
         base_seed = req.get("baseSeed")
         if base_seed is None:
             base_seed = random.randint(0, 9_000_000_000_000_000)
-        base_seed = int(base_seed)
+        try:
+            base_seed = int(base_seed)
+        except (TypeError, ValueError):
+            self.send_error_json("baseSeed는 정수여야 합니다 (요청값: %r)." % (req.get("baseSeed"),))
+            return
 
         if not comfy_alive():
             self.send_error_json(
@@ -856,7 +1013,7 @@ def create_server(host, port):
 
 
 def main():
-    global COMFY_URL, USER_DIR, JOB_TIMEOUT_SEC, BIND_HOST
+    global COMFY_URL, USER_DIR, JOB_TIMEOUT_SEC, BIND_HOST, BIND_PORT, HOST_CHECK_ENABLED
     parser = argparse.ArgumentParser(description="MCPTools ComfyUI 브리지 서버")
     parser.add_argument("--host", default="127.0.0.1",
                         help="바인딩할 주소. 기본값 127.0.0.1(로컬 전용). "
@@ -883,16 +1040,22 @@ def main():
 
     host = (args.host or "127.0.0.1").strip() or "127.0.0.1"
     BIND_HOST = host
+    BIND_PORT = args.port
+    # 외부 바인딩이면 접속에 쓰일 호스트명을 알 수 없어 허용 목록을 만들 수 없으므로 검증을 끈다.
+    # (자세한 정책 근거는 HOST_CHECK_ENABLED 선언부 주석 참고)
+    HOST_CHECK_ENABLED = is_loopback_host(host)
 
     server = create_server(host, args.port)
     print("[bridge] MCPTools 브리지 서버 시작: http://%s:%d (ComfyUI: %s, 버전 %s)"
           % (host, args.port, COMFY_URL, BRIDGE_VERSION))
     print("[bridge] 스크립트 경로: %s" % SCRIPT_PATH)
-    if host not in ("127.0.0.1", "localhost", "::1"):
+    if not HOST_CHECK_ENABLED:
         print("[bridge] 경고: 로컬 외 주소(%s)에 바인딩합니다 — "
               "같은 네트워크의 다른 기기가 접속할 수 있습니다. "
               "의도한 것이 아니면 Tools/MCP/Settings의 브리지 서버 주소를 "
               "http://127.0.0.1:<포트> 로 되돌려주세요." % host)
+        print("[bridge] 경고: 외부 바인딩이므로 Host 검증이 비활성화됩니다. "
+              "신뢰할 수 있는 네트워크에서만 사용하세요.")
     if user_dir_active():
         print("[bridge] 사용자 오버라이드 폴더 사용: %s" % USER_DIR)
     elif USER_DIR:

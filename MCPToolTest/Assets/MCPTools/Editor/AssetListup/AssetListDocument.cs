@@ -1,5 +1,7 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
+using UnityEngine;
 
 namespace MCPTools.Editor
 {
@@ -175,6 +177,13 @@ namespace MCPTools.Editor
     [Serializable]
     public class AssetListDocument
     {
+        /// <summary>
+        /// 이 도구가 저장하는 AssetList 문서의 스키마 버전입니다. 저장 시 항상 이 값을 기록하며,
+        /// 문서에 <c>schemaVersion</c> 키가 없으면 로드 시 이 버전(1)으로 간주합니다.
+        /// 문서의 기존 키 의미가 바뀌는 변경을 할 때 함께 올립니다.
+        /// </summary>
+        public const int CurrentSchemaVersion = 1;
+
         /// <summary>입력으로 사용한 기획서 경로 (Assets/ 기준 상대 경로).</summary>
         public string designDocPath = string.Empty;
 
@@ -198,6 +207,7 @@ namespace MCPTools.Editor
 
             return new Dictionary<string, object>
             {
+                { "schemaVersion", CurrentSchemaVersion },
                 { "designDocPath", designDocPath },
                 { "scanRootPath", scanRootPath },
                 { "createdAt", createdAt },
@@ -214,6 +224,8 @@ namespace MCPTools.Editor
             {
                 return null;
             }
+
+            WarnIfNewerSchemaVersion(dict);
 
             var doc = new AssetListDocument
             {
@@ -235,6 +247,52 @@ namespace MCPTools.Editor
             }
 
             return doc;
+        }
+
+        /// <summary>
+        /// 문서의 <c>schemaVersion</c>이 이 도구가 아는 버전보다 크면 경고만 남깁니다(로드는 막지 않습니다).
+        /// 키가 없거나 정수로 해석할 수 없는 값이면 <see cref="CurrentSchemaVersion"/>으로 간주하고 조용히 진행합니다.
+        /// </summary>
+        private static void WarnIfNewerSchemaVersion(Dictionary<string, object> dict)
+        {
+            if (!dict.TryGetValue("schemaVersion", out object value) || value == null)
+            {
+                // 구 문서(키 없음) → 버전 1로 간주하고 기존과 동일하게 로드한다.
+                return;
+            }
+
+            // MiniJson은 JSON 정수를 long, 실수를 double로 돌려준다. 손수 작성한 문서를 위해 문자열도 받아준다.
+            long version;
+            if (value is long asLong)
+            {
+                version = asLong;
+            }
+            else if (value is int asInt)
+            {
+                version = asInt;
+            }
+            else if (value is double asDouble)
+            {
+                version = (long)asDouble;
+            }
+            else if (!long.TryParse(
+                         value as string ?? string.Empty,
+                         NumberStyles.Integer,
+                         CultureInfo.InvariantCulture,
+                         out version))
+            {
+                // 정수로 해석할 수 없는 값 → 버전 정보가 없는 것으로 보고 조용히 진행한다.
+                return;
+            }
+
+            if (version > CurrentSchemaVersion)
+            {
+                Debug.LogWarning(
+                    $"[MCPTools] AssetList 문서의 schemaVersion이 {version}입니다 " +
+                    $"(이 도구가 아는 최신 버전: {CurrentSchemaVersion}). " +
+                    "더 새 버전의 MCPTools가 저장한 문서일 수 있어 일부 값이 다르게 해석될 수 있습니다. " +
+                    "로드는 그대로 계속하며, 결과가 이상하면 MCPTools를 최신 버전으로 업데이트해주세요.");
+            }
         }
     }
 }

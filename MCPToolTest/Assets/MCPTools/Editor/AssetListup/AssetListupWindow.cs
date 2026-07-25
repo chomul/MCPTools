@@ -114,11 +114,23 @@ namespace MCPTools.Editor
             CancelAiRun();
         }
 
+        /// <summary>
+        /// Play Mode·컴파일/임포트로 실행 버튼을 막아야 하는 사유입니다 (막지 않아도 되면 null).
+        /// MCP 도구와 같은 판정(<see cref="McpToolRegistry.GetBlockedReason"/>)을 쓰며 OnGUI마다 한 번 갱신합니다.
+        /// </summary>
+        private string _blockedReason;
+
         private void OnGUI()
         {
             if (_settings == null)
             {
                 _settings = MCPToolSettings.GetOrCreate();
+            }
+
+            _blockedReason = McpToolRegistry.GetBlockedReason();
+            if (_blockedReason != null)
+            {
+                EditorGUILayout.HelpBox(_blockedReason, MessageType.Warning);
             }
 
             DrawLoadExistingSection();
@@ -339,14 +351,18 @@ namespace MCPTools.Editor
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    if (GUILayout.Button("스캔 + 휴리스틱 추출(보조)", GUILayout.Height(ButtonHeight)))
+                    // 두 버튼 모두 프로젝트 스캔(씬 추가 열기 포함)을 수행하므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_blockedReason != null))
                     {
-                        RunBuild();
-                    }
+                        if (GUILayout.Button("스캔 + 휴리스틱 추출(보조)", GUILayout.Height(ButtonHeight)))
+                        {
+                            RunBuild();
+                        }
 
-                    if (GUILayout.Button("AI용 프롬프트 복사", GUILayout.Height(ButtonHeight)))
-                    {
-                        CopyAiPrompt();
+                        if (GUILayout.Button("AI용 프롬프트 복사", GUILayout.Height(ButtonHeight)))
+                        {
+                            CopyAiPrompt();
+                        }
                     }
 
                     if (GUILayout.Button("AI 응답 JSON 불러오기", GUILayout.Height(ButtonHeight)))
@@ -483,7 +499,8 @@ namespace MCPTools.Editor
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
-                    using (new EditorGUI.DisabledScope(_document == null))
+                    // [저장]은 목록 JSON을 쓰므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_document == null || _blockedReason != null))
                     {
                         if (GUILayout.Button("항목 추가", GUILayout.Height(ButtonHeight)))
                         {
@@ -787,9 +804,16 @@ namespace MCPTools.Editor
                         }
                     }
                 }
-                else if (GUILayout.Button("선택한 AI로 목록 생성", GUILayout.Height(PrimaryButtonHeight)))
+                else
                 {
-                    RunSelectedAi();
+                    // AI 실행은 프로젝트 스캔과 목록 저장을 동반하므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(_blockedReason != null))
+                    {
+                        if (GUILayout.Button("선택한 AI로 목록 생성", GUILayout.Height(PrimaryButtonHeight)))
+                        {
+                            RunSelectedAi();
+                        }
+                    }
                 }
             }
         }
@@ -1197,6 +1221,17 @@ namespace MCPTools.Editor
 
                 _statusMessage = $"저장 완료: {savedPath}";
                 ShowNotification(new GUIContent("목록을 저장했습니다."));
+
+                // 항목 id가 3단계에서 같은 파일명이 되면 후보·확정본이 조용히 덮어써진다.
+                // MCP 경로는 warnings로 받지만 id를 손으로 고치는 곳은 이 창이므로 여기서도 알린다 (R5).
+                // 저장은 이미 끝났고 되돌릴 것도 없으니 막지 않고 안내만 한다.
+                List<string> collisions = AssetListBuilder.FindIdCollisionWarnings(_document.items);
+                if (collisions.Count > 0)
+                {
+                    _statusMessage = $"저장 완료: {savedPath} (id 충돌 경고 {collisions.Count}건)";
+                    EditorUtility.DisplayDialog("에셋 리스트업 — 항목 id 충돌",
+                        string.Join("\n\n", collisions.ToArray()), "확인");
+                }
             }
             catch (System.Exception e)
             {

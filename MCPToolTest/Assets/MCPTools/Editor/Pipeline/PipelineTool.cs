@@ -104,7 +104,8 @@ namespace MCPTools.Editor
                 try
                 {
                     candidates = Task.Run(() =>
-                        CandidateGenerator.GenerateAsync(settings, item, workflowName, null, null)).GetAwaiter().GetResult();
+                        CandidateGenerator.GenerateAsync(
+                            settings, item, workflowName, null, null, interactive: false)).GetAwaiter().GetResult();
                 }
                 catch (Exception e)
                 {

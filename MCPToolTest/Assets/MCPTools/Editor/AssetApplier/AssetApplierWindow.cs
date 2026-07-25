@@ -40,10 +40,22 @@ namespace MCPTools.Editor
                 }
             }
 
-            /// <summary>검증 통과·미적용 여부 (일괄 적용 대상).</summary>
+            /// <summary>
+            /// 확정본이 있고 검증을 통과했는지 여부입니다 (개별 [선택 적용] 대상).
+            /// 이미 적용된 항목도 <b>의도적으로 다시 적용</b>할 수 있어야 하므로 <see cref="applied"/>는 보지 않습니다.
+            /// </summary>
+            public bool CanApplyAgain
+            {
+                get { return !string.IsNullOrEmpty(confirmedPath) && reasons.Count == 0; }
+            }
+
+            /// <summary>
+            /// 검증 통과·미적용 여부입니다 (일괄 적용 대상).
+            /// 이미 적용된 항목은 프리팹을 다시 저장하지 않도록 일괄 대상에서만 빠집니다.
+            /// </summary>
             public bool ReadyToApply
             {
-                get { return !applied && !string.IsNullOrEmpty(confirmedPath) && reasons.Count == 0; }
+                get { return !applied && CanApplyAgain; }
             }
         }
 
@@ -93,11 +105,23 @@ namespace MCPTools.Editor
             RefreshSpriteAssetPaths();
         }
 
+        /// <summary>
+        /// Play Mode·컴파일/임포트로 실행 버튼을 막아야 하는 사유입니다 (막지 않아도 되면 null).
+        /// MCP 도구와 같은 판정(<see cref="McpToolRegistry.GetBlockedReason"/>)을 쓰며 OnGUI마다 한 번 갱신합니다.
+        /// </summary>
+        private string _blockedReason;
+
         private void OnGUI()
         {
             if (_settings == null)
             {
                 _settings = MCPToolSettings.GetOrCreate();
+            }
+
+            _blockedReason = McpToolRegistry.GetBlockedReason();
+            if (_blockedReason != null)
+            {
+                EditorGUILayout.HelpBox(_blockedReason, MessageType.Warning);
             }
 
             DrawInputSection();
@@ -280,7 +304,8 @@ namespace MCPTools.Editor
                         EditorGUILayout.LabelField("수정됨 (저장되지 않음)", EditorStyles.miniLabel, GUILayout.Width(140f));
                     }
 
-                    using (new EditorGUI.DisabledScope(!_targetsDirty))
+                    // 대상 편집 저장은 AssetList JSON을 다시 쓰므로 Play Mode·컴파일 중에는 막는다 (R2).
+                    using (new EditorGUI.DisabledScope(!_targetsDirty || _blockedReason != null))
                     {
                         if (GUILayout.Button("저장", GUILayout.Width(SmallButtonWidth), GUILayout.Height(ButtonHeight)))
                         {
@@ -699,7 +724,10 @@ namespace MCPTools.Editor
                     ? _states[_selectedIndex]
                     : null;
 
-                using (new EditorGUI.DisabledScope(selected == null || !selected.ReadyToApply))
+                // 개별 적용은 이미 적용된 항목에도 항상 가능하다 (CanApplyAgain).
+                // Play Mode·컴파일 중에는 프리팹/씬 저장을 동반하는 적용을 막는다 (R2).
+                using (new EditorGUI.DisabledScope(
+                           selected == null || !selected.CanApplyAgain || _blockedReason != null))
                 {
                     if (GUILayout.Button("선택 적용", GUILayout.Height(PrimaryButtonHeight)))
                     {
@@ -707,8 +735,9 @@ namespace MCPTools.Editor
                     }
                 }
 
+                // 일괄 적용은 이미 적용된 항목을 제외한다 (불필요한 프리팹 재저장 방지 — R3).
                 List<ItemState> ready = _states.Where(s => s.ReadyToApply).ToList();
-                using (new EditorGUI.DisabledScope(ready.Count == 0))
+                using (new EditorGUI.DisabledScope(ready.Count == 0 || _blockedReason != null))
                 {
                     if (GUILayout.Button($"일괄 적용 (검증 통과 {ready.Count}개)", GUILayout.Height(PrimaryButtonHeight),
                             GUILayout.Width(220f)))
@@ -716,6 +745,15 @@ namespace MCPTools.Editor
                         ApplyStates(ready);
                     }
                 }
+            }
+
+            int alreadyApplied = _states.Count(s => s.applied);
+            if (alreadyApplied > 0)
+            {
+                EditorGUILayout.LabelField(
+                    $"이미 적용됨 {alreadyApplied}개 — 일괄 적용에서 제외됩니다. " +
+                    "다시 적용하려면 항목을 선택하고 [선택 적용]을 눌러주세요.",
+                    EditorStyles.wordWrappedMiniLabel);
             }
         }
 
@@ -800,7 +838,11 @@ namespace MCPTools.Editor
             }
         }
 
-        /// <summary>항목별 확정본 탐색·검증을 다시 수행합니다.</summary>
+        /// <summary>
+        /// 항목별 확정본 탐색·검증을 다시 수행합니다.
+        /// 적용 여부는 <see cref="ApplyHistory"/>(GenerationResults.json의 applications 기록)에서 복원하므로
+        /// 창을 닫았다 다시 열어도 "적용됨" 상태가 유지됩니다 (R3).
+        /// </summary>
         private void RebuildStates()
         {
             _states.Clear();
@@ -808,6 +850,8 @@ namespace MCPTools.Editor
             {
                 return;
             }
+
+            HashSet<string> appliedIds = ApplyHistory.LoadAppliedItemIds(_settings);
 
             foreach (AssetListItem item in _document.items)
             {
@@ -818,6 +862,7 @@ namespace MCPTools.Editor
                     state.reasons = AssetApplier.ValidateItem(item, state.confirmedPath);
                 }
 
+                state.applied = !string.IsNullOrEmpty(item.id) && appliedIds.Contains(item.id);
                 _states.Add(state);
             }
         }
