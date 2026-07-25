@@ -214,7 +214,8 @@ Task 문서가 우려한 "한쪽 변경이 유실될 수 있다"는 **재현되�
 
 - [x] `SanitizeId` 결과가 같은 항목 id가 둘 이상이면 1단계 저장 `warnings`에 추가
 - [x] 후보 생성·확정 시 같은 파일명 충돌 검출 후 안내
-- [ ] 시트 저장(`SpriteSheetImporter.cs:1439`)이 기존 파일을 덮어쓸 때 창은 확인, MCP는 응답에 명시 — **보류(사용자 확인 대기)**
+- [x] 시트 저장이 기존 파일을 덮어쓸 때 창은 확인, MCP는 응답에 명시 — **Task 8에서 같은 파일을 고치며 함께 구현됨** (커밋 `921842a`)
+  - 확인(주 에이전트): `SpriteSheetImportResult`에 `overwroteExisting`·`canceled` 필드 추가(`SpriteSheetImporter.cs:46,49`), `interactive`=true면 **픽셀 처리 전에** 덮어쓰기 확인(`:629`), false면 확인 없이 덮어쓰되 결과로만 알림(`:299`, `:608`), MCP 응답에 `overwroteExisting` 노출(`SpriteSheetTool.cs:159`). 이 체크박스만 갱신이 누락돼 있어 실제 구현에 맞춰 정정함.
 
 **구현 결과**
 
