@@ -89,8 +89,10 @@
 - [x] Unity Test Runner(EditMode)에서 전체 테스트 통과 — **74/74 통과, 0.27초** (Unity 6000.5.2f1)
 - [ ] `EmptyCellContentRatio` 값을 일부러 바꾸면 시트 검출 테스트가 **실패**한다 (정답지가 실제로 동작하는지 확인)
   - 미수행 — `SpriteSheetImporter.cs`는 터미널 B(Task 8) 영역이라 이번 병행 작업 중에는 건드리지 않았다. Task 8이 C23/C24로 알고리즘을 재작성할 때 이 테스트가 실제로 회귀를 잡는지가 자연스러운 검증이 된다
-- [ ] 빈 Unity 6 프로젝트에 git URL로 설치 → `testables` 미지정 상태에서 **컴파일 오류 0**, 테스트 어셈블리 미컴파일
-- [ ] 같은 프로젝트의 `manifest.json`에 `testables`로 `com.sungchan.mcptools`를 추가하면 Test Runner에 테스트가 나타나고 통과
-- [x] GitHub 저장소 첫 화면에서 README가 렌더링되고 링크 3종이 살아 있음 — API로 확인. **빈 프로젝트에 설치 URL로 실제 설치하는 검증은 미수행**(별도 Unity 프로젝트 필요, 릴리스 시 `docs/릴리스절차.md` §설치 검증에서 수행)
+- [x] 빈 Unity 6 프로젝트에 git URL로 설치 → **컴파일 오류 0** — **v0.3.0 릴리스 직후 사용자가 직접 확인(2026-07-26, Windows)**. 릴리스 절차 §5 설치 검증의 핵심 조건 통과.
+  - 미확인으로 남긴 세부: ① `testables` 미지정 상태에서 **테스트 어셈블리가 실제로 컴파일에서 빠졌는지**(컴파일 오류 0이면 대체로 정상이지만 직접 대조하지는 않음 — 설치 프로젝트의 `Library/ScriptAssemblies/`에 `MCPTools.Editor.Tests.dll`이 없어야 한다), ② 설정 에셋이 `Assets/MCPTools.User/`에 생성되는지, ③ [서버 시작]으로 브리지가 PackageCache에서 기동되는지
+  - **다른 PC 검증은 미수행** — 사용자 확인 예정. macOS·Linux는 여전히 미검증(Task 7 D10 보류, README에 명시)
+- [ ] 같은 프로젝트의 `manifest.json`에 `testables`로 `com.sungchan.mcptools`를 추가하면 Test Runner에 테스트가 나타나고 통과 — 미수행(설치 프로젝트에서 선택적으로 확인)
+- [x] GitHub 저장소 첫 화면에서 README가 렌더링되고 링크 3종이 살아 있음 — API로 확인
 - [~] `MCPToolsInfo.Version`만 올린 브랜치를 push하면 CI가 버전 불일치로 실패 — 원격 push로는 미수행. 대신 **로컬에서 같은 스크립트에 불일치 값을 주입해 exit 1과 한 줄 사유를 확인**했고(주 에이전트), 서브에이전트가 격리 픽스처 저장소에서 실제 파일을 고쳐 재현했다. 원격 실패 경로를 남기려고 일부러 깨진 커밋을 push하지는 않았다
 - [ ] `.meta` 하나를 지운 브랜치를 push하면 CI가 실패
