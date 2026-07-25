@@ -175,5 +175,70 @@
 
 - [ ] 슬라이더를 6으로 바꾸면 버튼 라벨이 [후보 6개 생성]으로 즉시 바뀌고, 생성 결과가 실제로 6개 나옴(시드 `seed..seed+5`)
 - [ ] 바꾼 값이 `Tools/MCP/Settings`의 "후보 개수"에도 반영되고, 창을 닫았다 열거나 에디터를 재시작해도 유지됨
-- [ ] [전체 생성 (미생성만)]도 같은 개수로 생성됨
+- [ ] [미생성 전체 생성]·[선택 항목 생성]도 같은 개수로 생성됨
 - [ ] 1로 내렸을 때 정상 동작하고, 슬라이더가 0 이하로 내려가지 않음
+
+## 6. 2026-07-25 요청 — 현재 설정으로 다중 항목 생성 + 생성 창 항목 편집
+
+> 배경: 3단계에서 항목을 하나씩만 생성할 수 있어(전체 생성은 "미생성만" 한 종류뿐) 같은 설정으로 여러 항목을
+> 돌리기 번거로웠고, 항목을 고치려면 2단계 창으로 돌아가야 했다.
+
+- [x] 항목 체크박스 + 선택 도구 모음 (재구현 — 2열 레이아웃 개편 때 유실됨)
+  - 구현 결과: 목록 각 행 왼쪽에 체크박스(행 클릭 선택과 독립, `_checkedItemIds` HashSet 보관). 목록 상단에 [전체]/[해제]/[미생성] 버튼(`DrawSelectionToolbar`) — 대상은 현재 워크플로 필터를 통과한 항목으로 한정. 목록 하단 요약을 "확정 n/N · 체크 M개"로 확장. PromptSet 재로드·[새 목록] 시 체크 초기화, 항목 삭제 시 해당 체크 제거.
+  - 관련 파일: `.../ComfyUIGenerator/ComfyUIGeneratorWindow.cs` (`DrawSelectionToolbar`/`SetItemChecked`/`CheckedTargets`/`UnrenderedTargets`/`IsUnrenderedTarget`)
+- [x] [선택 항목 생성] / [미생성 전체 생성] — 현재 설정 그대로 일괄 생성
+  - 구현 결과: 생성 버튼을 3개로 분리 — [후보 N개 생성](단건) / [선택 항목 생성 (M개 × N)](체크 0개면 비활성) / [미생성 전체 생성 (K개 × N)]. 두 일괄 버튼 모두 `StartBatchGeneration(targets, scopeLabel)` → `RunBatchGenerationAsync(targets, scopeLabel)`를 공유한다. **일괄 생성이 항목별 기본 워크플로가 아니라 현재 선택된 워크플로와 편집 중인 변수 값을 모든 대상에 적용**하도록 변경(role=positive/negative 변수만 제외해 항목별 프롬프트 자동 주입 유지). 변수 맵은 루프 **밖에서 1회** 만들어 참조 이미지 업로드가 항목 수만큼 반복되지 않는다. 실행 전 확인 다이얼로그에 대상 수·워크플로·항목당 후보 수, 프롬프트가 비어 제외되는 수, **기존 후보가 삭제되고 재생성되는 수**를 표시. 진행률/취소/실패 기록 후 계속/완료 요약/배지 갱신은 기존 로직 유지.
+  - 관련 파일: `.../ComfyUIGenerator/ComfyUIGeneratorWindow.cs` (`DrawGenerateSection`/`StartBatchGeneration`/`RunBatchGenerationAsync`)
+- [x] 항목 클릭 시 워크플로 자동 전환 조건 완화
+  - 구현 결과: `SelectItem`이 항목을 고를 때마다 기본 워크플로로 되돌리던 동작을, **현재 워크플로가 이미 그 항목 종류에 해당하면 유지**하도록 변경(`ItemMatchesWorkflow(item)`이면 전환하지 않음). 일괄 생성이 "현재 워크플로"를 쓰기 때문에 `StyleChange` 등으로 작업 중 항목을 클릭하면 설정이 되돌아가는 문제를 막는다. 종류가 다를 때(오디오 항목을 이미지 워크플로에서 클릭 등)는 기존대로 전환.
+- [x] 항목 추가/수정/삭제 — **별도 편집 창** 방식 (사용자 피드백 반영, 2026-07-25 재작업)
+  - 1차 구현(왼쪽 열 하단의 접이식 [항목 편집] 인라인 패널)은 **PromptSet 로드 시 왼쪽 열 레이아웃이 눌려 기존 2열 화면이 달라 보이는 문제**로 사용자 피드백을 받아 폐기했다. 인라인 패널·[새 목록] 버튼·문서 경로 표시 행을 모두 제거하고 왼쪽 열 폭도 320px로 되돌려 **기존 2열 레이아웃을 그대로 유지**한다.
+  - 구현 결과: 항목 목록 아래에 **한 줄짜리 조작 행**(`DrawItemActionRow`)만 추가 — [추가]/[편집]/[삭제]/[저장 (*)]. [추가]·[편집]은 보조 창 `PromptItemEditWindow`(같은 파일, `PromptSetJsonImportWindow` 패턴)를 띄우고, 그 창에서 ID(자동 부여·읽기 전용)·이름·종류·UI 여부·대상 프리팹/오브젝트 경로·설명·positive/negative를 작성한 뒤 [저장]하면 `ApplyEditedItem`이 **같은 id면 교체, 없으면 목록 끝에 추가**하고 그 항목을 선택 + 변수 편집란 동기화(`ApplyItemPromptsToVariables(overwriteWithEmpty: true)`)까지 수행한다. 편집 창은 **복사본**을 다루므로 [취소] 시 원본이 그대로 남는다. 새 항목 초안(`CreateItemDraft`)은 현재 워크플로 종류에 맞는 assetType + 변수란의 프롬프트를 초기값으로 갖고, 창의 [생성 창의 현재 프롬프트 가져오기] 버튼으로 다시 가져올 수 있다. 편집 창 필드는 `[SerializeField]`로 보관해 도메인 리로드 후에도 입력 내용과 소유 창 연결이 유지된다.
+  - 삭제는 목록에서만 제거(후보/확정 파일 보존)하며 확인 다이얼로그를 거친다. [저장]은 `PromptBuilder.Save(doc, path)` 재사용 — 로드한 경로가 있으면 덮어쓰고 없으면 `Docs/2_PromptSet/PromptSet_{yyyyMMdd_HHmm}.json` 신규 저장 후 드롭다운을 갱신·선택. 미저장 변경은 버튼 라벨 `저장 *`로 표시하고, 다른 PromptSet 로드 전에 확인 다이얼로그(`ConfirmDiscardChanges`). PromptSet 미로드 상태에서도 입력 영역의 [항목 추가]로 빈 목록을 시작할 수 있다(문서 없을 때만 보이던 안내 라벨과 같은 줄이라 행 수 변화 없음).
+  - 관련 파일: `.../ComfyUIGenerator/ComfyUIGeneratorWindow.cs`(`DrawItemActionRow`/`OpenItemEditor`/`CreateItemDraft`/`ApplyEditedItem`/`DeleteSelectedItem`/`SaveDocument`/`PromptItemEditWindow`), `MCPToolTest/Assets/MCPTools/README.md`(3단계 §3·§4), `MCPToolTest/Assets/MCPTools/CHANGELOG.md`
+- 검증 상태: `validate_script`(standard) 오류 0건, `refresh_unity`(compile request) + `read_console` 컴파일 오류 0건 (MCP WebSocket 무관 경고 1건 제외). **동작 확인은 아래 에디터 테스트 필요.**
+
+### 에디터 테스트 체크리스트 (다중 생성 / 항목 편집)
+
+- [ ] 행 체크박스와 [전체]/[해제]/[미생성] 버튼이 현재 워크플로 필터 기준으로 동작하고, 하단 요약이 "확정 n/N · 체크 M개"로 갱신됨
+- [ ] [선택 항목 생성 (M개 × N)] — 체크 0개면 비활성, 실행 시 확인 다이얼로그에 대상 수/워크플로/재생성 대상 수가 맞게 표시되고 체크한 항목만 순차 생성됨
+- [ ] 워크플로를 `StyleChange`(또는 `GenerateImageFlux`)로 바꾸고 변수를 조정한 뒤 일괄 생성 → **모든 항목이 그 워크플로와 조정한 변수 값으로** 생성되고, 프롬프트만 항목별 값이 들어감(후보 메타 `{seed}.json`으로 확인)
+- [ ] 참조 이미지가 있는 워크플로(UI/StyleChange)로 일괄 생성 시 업로드가 1회만 일어나고 모든 항목에 같은 참조가 적용됨
+- [ ] 이미지 항목을 여러 개 클릭해도 워크플로 선택이 `StyleChange`에서 기본값으로 되돌아가지 않음 / 오디오 항목을 클릭하면 `Audio`로 전환됨
+- [ ] **PromptSet을 로드해도 창 레이아웃이 기존 2열 그대로**이고(왼쪽 320px 목록 + 오른쪽 워크플로/생성/후보), 목록 아래에 [추가]/[편집]/[삭제]/[저장] 한 줄만 추가되어 있음
+- [ ] [추가] → 편집 창에서 이름/프롬프트 작성 → [저장 (목록에 추가)] 시 목록 끝에 새 항목이 생기고 자동 선택되며, 그 상태로 [후보 N개 생성]이 작성한 프롬프트로 동작함
+- [ ] [편집] → 값 수정 후 [저장 (항목에 반영)] 시 같은 ID 항목이 갱신되고 오른쪽 변수 편집란의 프롬프트도 함께 바뀜 / [취소] 시 원본이 그대로 유지됨
+- [ ] 편집 창의 [생성 창의 현재 프롬프트 가져오기]가 워크플로 변수의 positive/negative를 그대로 채움
+- [ ] [삭제] 시 확인 다이얼로그가 뜨고, 삭제해도 `Generated/3_Candidates/{항목id}/`의 후보 파일은 남아 있음
+- [ ] 편집 후 저장하지 않으면 버튼이 [저장 *]로 표시되고, 그 상태로 다른 PromptSet을 [로드]하면 확인 다이얼로그가 뜸
+- [ ] [저장] — 로드한 PromptSet JSON이 갱신되고 `*`가 사라짐 / PromptSet 없이 시작한 목록은 `Docs/2_PromptSet/`에 새 파일로 저장되고 드롭다운에서 그 파일이 선택됨
+- [ ] PromptSet 미로드 상태에서 [항목 추가] → 항목 구성 → 생성 → 확정 → [저장] 흐름이 동작함
+
+## 7. 2026-07-25 요청 — 항목 편집 창 대상 선택 방식 + 빈 프롬프트 + 오른쪽 열 잘림
+
+> 배경: 항목 편집 창에서 대상 프리팹/오브젝트를 경로 문자열로 직접 타자쳐야 했고, 새 항목의 프롬프트가
+> 변수란 값으로 미리 채워져 있었다. 또 생성 창 오른쪽 열이 창 폭을 넘어가 내용이 잘려 보였다.
+
+- [x] 대상 프리팹/대상 오브젝트를 **선택 방식**으로 변경
+  - 구현 결과: `PromptItemEditWindow`의 두 TextField를 `DrawTargetFields`로 교체. **대상 프리팹**은 `EditorGUILayout.ObjectField(GameObject, allowSceneObjects: false)` — 드래그&드롭/◎ 선택, 선택 즉시 `AssetDatabase.GetAssetPath`로 경로 기록하고 대상 오브젝트 선택은 초기화. **대상 오브젝트**는 프리팹 계층을 훑어 만든 경로 드롭다운(`CollectObjectPaths`/`DrawObjectPathPopup`) — 경로 형식은 `AssetApplier.FindTargetTransform` 규칙 그대로(루트=루트 이름, 자식=루트 기준 상대 경로), 표시 라벨은 팝업이 하위 메뉴로 해석하지 않게 `/`를 ` › `로 치환하고 Image/RawImage/SpriteRenderer/AudioSource가 있으면 `[컴포넌트]` 표시를 덧붙인다. 목록은 `_cachedPrefabPath` 기준으로 프리팹이 바뀔 때만 재생성. 프리팹 미지정 시 비활성 팝업으로 안내하고, 프리팹 경로를 찾을 수 없으면 경고 + [경로 지우기], 저장된 오브젝트 경로가 계층에 없으면 값을 버리지 않고 `(현재: 경로)`를 경고색으로 유지한다.
+  - 관련 파일: `.../ComfyUIGenerator/ComfyUIGeneratorWindow.cs`(`PromptItemEditWindow.DrawTargetFields`/`RefreshObjectPathsIfNeeded`/`CollectObjectPaths`/`CollectChildPaths`/`SlotSuffix`/`DrawObjectPathPopup`)
+- [x] 새 항목 프롬프트는 기본 빈칸
+  - 구현 결과: `CreateItemDraft`에서 `CopyVariablePromptsTo(item)` 호출 제거 — ID·종류만 채우고 positive/negative는 빈칸으로 시작한다. 변수란 값이 필요하면 편집 창의 [생성 창의 현재 프롬프트 가져오기] 버튼으로 가져온다(기존 버튼 유지).
+- [x] 오른쪽 열이 창 밖으로 잘리던 문제 — 가로 스크롤 없이 표시 폭에 맞춤
+  - 1차 시도(가로 스크롤바를 `GUIStyle.none`으로 지정)는 **역효과**라 폐기했다 — Unity는 가로 스크롤바가 none이면 `allowHorizontalScroll = false`로 보고 **스크롤뷰의 최소 폭을 내용 폭으로 잡기 때문에**, 워크플로/변수가 채워져 세로 스크롤바가 생기는 순간 오른쪽 열이 창 밖으로 밀려 더 심하게 잘렸다(사용자 피드백).
+  - 구현 결과: 스크롤뷰는 기본값(`BeginScrollView(_scroll)`)으로 되돌리고, **내용을 표시 폭에 고정**해 애초에 가로로 넘치지 않게 한다. 열 폭은 스크롤뷰 **바깥**에서 높이 0 사각형으로 측정(`MeasureRightColumnWidth`, Repaint 시에만 갱신)하고 — 안에서 재면 내용이 넓어질수록 측정값도 커지는 되먹임이 생긴다 — 세로 스크롤바 몫 20px를 뺀 값(`RightContentWidth`)을 `VerticalScope(GUILayout.Width(...))`에 적용한다. 같은 폭 기준으로 `EditorGUIUtility.labelWidth`를 `Clamp(폭*0.4, 90, 160)`으로 낮췄다가 스크롤뷰 종료 전에 복원한다. 후보 격자는 이 실측 폭으로 열 수를 정하고 셀 크기도 남는 폭에 맞춰 축소(`DrawCandidateCell(candidate, index, cellSize)`), 왼쪽 열 폭은 고정 320px에서 `Mathf.Clamp(창폭 - 420, 240, 320)`으로 변경(`CurrentLeftColumnWidth`), 라벨이 긴 일괄 생성 버튼 2개는 오른쪽 열이 520px 미만이면 세로로 쌓는다.
+  - 함께 수정: 확정 에셋 패널의 경로 라벨과 하단 상태 메시지는 **띄어쓰기 없는 긴 경로** 때문에 word-wrap이 줄을 못 나눠 최소 폭이 커지고, 그만큼 왼쪽 열/창을 넓혀 오른쪽을 밀어냈다. 두 라벨 모두 `GUILayout.Width`로 폭을 고정했다(`DrawConfirmedAssetPanel`/`DrawBottomBar`).
+  - 관련 파일: `.../ComfyUIGenerator/ComfyUIGeneratorWindow.cs`(`OnGUI`/`CurrentLeftColumnWidth`/`MeasureRightContentWidth`/`RightContentWidth`/`DrawCandidateSection`/`DrawCandidateCell`/`DrawGenerateSection`/`DrawItemListPanel`), `MCPToolTest/Assets/MCPTools/README.md`(3단계 §4), `MCPToolTest/Assets/MCPTools/CHANGELOG.md`
+- 검증 상태: `validate_script`(standard) 오류 0건, `refresh_unity`(compile request) + `read_console` 컴파일 오류 0건(MCP WebSocket 무관 경고 1건 제외). **동작 확인은 아래 에디터 테스트 필요.**
+
+### 에디터 테스트 체크리스트 (대상 선택 / 빈 프롬프트 / 오른쪽 열)
+
+- [ ] [추가]/[편집] 창에서 **대상 프리팹**에 프로젝트 창의 프리팹을 끌어다 놓거나 ◎로 선택하면 경로가 기록되고, 씬 오브젝트는 선택되지 않음
+- [ ] **대상 오브젝트** 드롭다운에 프리팹 루트와 모든 자식이 나오고, Image/RawImage/SpriteRenderer/AudioSource가 있는 오브젝트에 `[컴포넌트]` 표시가 붙음. 선택 후 [저장] → 4단계에서 그 오브젝트에 정상 적용됨
+- [ ] 대상 프리팹을 다른 프리팹으로 바꾸면 대상 오브젝트 선택이 초기화되고, 새 프리팹의 계층이 드롭다운에 반영됨
+- [ ] 대상 프리팹을 삭제/이동한 항목을 [편집]하면 경고와 [경로 지우기]가 뜨고, 계층이 바뀌어 없어진 오브젝트 경로는 `(현재: ...)`로 유지됨
+- [ ] [추가]로 만든 새 항목의 positive/negative가 **빈칸**이고, [생성 창의 현재 프롬프트 가져오기]를 누르면 변수란 값이 채워짐
+- [ ] 창을 좁게(가로 1000px 이하) 줄여도 오른쪽 열에 **가로 스크롤바가 생기지 않고** 워크플로/변수/버튼이 잘리지 않음. 후보 썸네일이 오른쪽 끝에서 잘리지 않고 열 수가 폭에 맞춰 줄어듦
+- [ ] **PromptSet 로드 후 워크플로/변수가 채워져 세로 스크롤바가 생겨도** 오른쪽 열이 창 밖으로 밀리지 않음 (1차 시도에서 발생한 회귀)
+- [ ] 확정된 항목을 선택해 왼쪽 하단에 긴 확정 에셋 경로가 표시돼도 오른쪽 열이 밀리지 않음 / 하단 상태 메시지에 긴 경로가 떠도 마찬가지
+- [ ] 오른쪽 열 내용이 길어지면 **세로 스크롤**로 [확정] 버튼까지 도달할 수 있음

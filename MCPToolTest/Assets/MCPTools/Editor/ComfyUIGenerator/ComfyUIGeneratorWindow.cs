@@ -21,7 +21,19 @@ namespace MCPTools.Editor
         private const float SmallButtonWidth = 80f;
         private const float ThumbnailSize = 160f;
         private const double ServerCheckIntervalSeconds = 5.0;
-        private const float LeftColumnWidth = 320f;
+
+        // 왼쪽 열은 기본 320px이지만, 창이 좁아지면 오른쪽 열이 잘리지 않도록 240px까지 줄어든다.
+        private const float LeftColumnMaxWidth = 320f;
+        private const float LeftColumnMinWidth = 240f;
+
+        // 오른쪽 열이 가로 스크롤 없이 쓸 수 있는 최소 폭 (이보다 좁아지면 왼쪽 열을 줄인다).
+        private const float RightColumnMinWidth = 420f;
+
+        // 세로 스크롤바 + 여백 예상치. 내용 폭을 이만큼 줄여 가로 스크롤이 생기지 않게 한다.
+        private const float ScrollbarWidth = 20f;
+
+        /// <summary>항목 편집 패널의 종류 선택지입니다 (2단계 창과 동일).</summary>
+        private static readonly string[] AssetTypeOptions = { "image", "ui", "audio" };
 
         // 후보 개수 슬라이더 범위. 상한은 ComfyUI 큐가 한 번에 처리하기 현실적인 수준으로 잡았다.
         private const int MinCandidateCount = 1;
@@ -47,6 +59,14 @@ namespace MCPTools.Editor
         private int _selectedSetIndex;
         private PromptSetDocument _document;
         private int _selectedItemIndex = -1;
+
+        // 로드한 PromptSet JSON 경로와 편집 상태 (항목 편집 창으로 추가/수정한 결과는 목록에만 반영되고,
+        // [저장]을 눌러야 JSON 파일에 기록된다).
+        private string _documentPath = string.Empty;
+        private bool _documentDirty;
+
+        // 일괄 생성 대상으로 체크된 항목 ID들 (목록 행의 체크박스).
+        private readonly HashSet<string> _checkedItemIds = new HashSet<string>();
 
         // 항목별 상태 캐시 (목록 배지/확정 미리보기 표시용):
         // 항목 ID → 후보 개수, 항목 ID → 확정본 경로 (GenerationResults.json 기록 기반)
@@ -79,6 +99,10 @@ namespace MCPTools.Editor
         private string _statusMessage = string.Empty;
         private Vector2 _scroll;
         private Vector2 _itemListScroll;
+
+        // 오른쪽 열의 실제 폭 (Repaint 때 측정). 창 폭에서 빼는 추정은 스크롤바/여백만큼 어긋나
+        // 후보 썸네일이 잘렸기 때문에, 레이아웃이 실제로 준 폭을 재서 쓴다.
+        private float _rightColumnWidth;
 
         // 서버 상태
         private bool _bridgeAlive;
@@ -202,27 +226,75 @@ namespace MCPTools.Editor
             DrawServerSection();
             EditorGUILayout.Space(6f);
 
-            // 2열 레이아웃: 왼쪽 고정 열(입력/항목 목록), 오른쪽 열(워크플로/생성/후보)
+            // 2열 레이아웃: 왼쪽 열(입력/항목 목록), 오른쪽 열(워크플로/생성/후보)
             using (new EditorGUILayout.HorizontalScope())
             {
-                using (new EditorGUILayout.VerticalScope(GUILayout.Width(LeftColumnWidth)))
+                using (new EditorGUILayout.VerticalScope(GUILayout.Width(CurrentLeftColumnWidth())))
                 {
                     DrawInputSection();
                 }
 
                 using (new EditorGUILayout.VerticalScope())
                 {
+                    // 열 폭은 스크롤뷰 "바깥"에서 잰다. 안에서 재면 내용이 넓어질 때 그 값이 다시 커지는
+                    // 되먹임이 생겨 열이 창 밖으로 밀린다.
+                    MeasureRightColumnWidth();
+                    float contentWidth = RightContentWidth();
+
                     _scroll = EditorGUILayout.BeginScrollView(_scroll);
-                    DrawWorkflowSection();
-                    EditorGUILayout.Space(6f);
-                    DrawGenerateSection();
-                    EditorGUILayout.Space(6f);
-                    DrawCandidateSection();
+
+                    // 내용을 표시 폭에 고정해 가로 스크롤이 필요 없게 만든다. 라벨 폭도 열 폭에 맞춰 줄여
+                    // 좁은 창에서 입력 필드가 밀려나지 않게 한다.
+                    float previousLabelWidth = EditorGUIUtility.labelWidth;
+                    EditorGUIUtility.labelWidth = Mathf.Clamp(contentWidth * 0.4f, 90f, 160f);
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(contentWidth)))
+                    {
+                        DrawWorkflowSection();
+                        EditorGUILayout.Space(6f);
+                        DrawGenerateSection();
+                        EditorGUILayout.Space(6f);
+                        DrawCandidateSection();
+                    }
+
+                    EditorGUIUtility.labelWidth = previousLabelWidth;
                     EditorGUILayout.EndScrollView();
                 }
             }
 
             DrawBottomBar();
+        }
+
+        /// <summary>
+        /// 현재 창 폭에 맞는 왼쪽 열 폭입니다. 오른쪽 열이 최소 폭을 유지하도록 창이 좁으면 함께 줄어듭니다.
+        /// </summary>
+        private float CurrentLeftColumnWidth()
+        {
+            return Mathf.Clamp(position.width - RightColumnMinWidth, LeftColumnMinWidth, LeftColumnMaxWidth);
+        }
+
+        /// <summary>
+        /// 오른쪽 열의 실제 폭을 측정합니다 (Repaint 시에만 유효).
+        /// 높이 0짜리 가로 확장 사각형을 잡아 창 폭에서 추정하지 않고 레이아웃이 준 값을 그대로 얻습니다.
+        /// </summary>
+        private void MeasureRightColumnWidth()
+        {
+            Rect probe = GUILayoutUtility.GetRect(1f, 0f, GUILayout.ExpandWidth(true));
+            if (Event.current.type == EventType.Repaint && probe.width > 1f)
+            {
+                _rightColumnWidth = probe.width;
+            }
+        }
+
+        /// <summary>
+        /// 오른쪽 열에서 내용이 쓸 수 있는 폭입니다 (세로 스크롤바와 여백 제외).
+        /// 아직 측정 전이면 창 폭에서 추정합니다.
+        /// </summary>
+        private float RightContentWidth()
+        {
+            float column = _rightColumnWidth > 1f
+                ? _rightColumnWidth
+                : Mathf.Max(RightColumnMinWidth, position.width - CurrentLeftColumnWidth() - 24f);
+            return Mathf.Max(180f, column - ScrollbarWidth);
         }
 
         // ─────────────────────────── 서버 상태/시작/종료 ───────────────────────────
@@ -430,16 +502,27 @@ namespace MCPTools.Editor
 
                 if (_document == null)
                 {
-                    EditorGUILayout.LabelField("PromptSet JSON을 로드하면 항목을 선택할 수 있습니다.", EditorStyles.miniLabel);
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.LabelField("PromptSet JSON을 로드하면 항목을 선택할 수 있습니다.", EditorStyles.miniLabel);
+                        if (GUILayout.Button(
+                                new GUIContent("항목 추가", "PromptSet 없이 항목을 직접 작성해 새 목록을 시작합니다."),
+                                EditorStyles.miniButton, GUILayout.Width(SmallButtonWidth)))
+                        {
+                            OpenItemEditor(null);
+                        }
+                    }
+
                     return;
                 }
 
                 DrawItemListPanel();
+                DrawItemActionRow();
 
                 PromptItem item = SelectedItem();
                 if (item != null && string.IsNullOrEmpty(item.positive))
                 {
-                    EditorGUILayout.HelpBox("이 항목의 positive 프롬프트가 비어 있습니다. 2단계에서 채운 뒤 생성하세요.",
+                    EditorGUILayout.HelpBox("이 항목의 positive 프롬프트가 비어 있습니다. [편집]이나 2단계에서 채운 뒤 생성하세요.",
                         MessageType.Warning);
                 }
             }
@@ -493,9 +576,13 @@ namespace MCPTools.Editor
 
             if (filtered.Count == 0)
             {
-                EditorGUILayout.HelpBox("이 워크플로에 해당하는 항목이 없습니다.", MessageType.Info);
+                EditorGUILayout.HelpBox(
+                    "이 워크플로에 해당하는 항목이 없습니다. 아래 [항목 편집]의 [추가]로 항목을 만들 수 있습니다.",
+                    MessageType.Info);
                 return;
             }
+
+            DrawSelectionToolbar(filtered);
 
             _itemListScroll = EditorGUILayout.BeginScrollView(_itemListScroll, GUILayout.ExpandHeight(true));
             foreach (int i in filtered)
@@ -509,8 +596,16 @@ namespace MCPTools.Editor
                     if (selected && Event.current.type == EventType.Repaint)
                     {
                         EditorGUI.DrawRect(
-                            new Rect(rowRect.x, rowRect.y, LeftColumnWidth - 24f, 22f),
+                            new Rect(rowRect.x, rowRect.y, CurrentLeftColumnWidth() - 24f, 22f),
                             new Color(0.24f, 0.49f, 0.90f, 0.25f));
+                    }
+
+                    // 일괄 생성 대상 체크박스 (행 선택과 독립적으로 동작한다).
+                    bool wasChecked = _checkedItemIds.Contains(item.id);
+                    bool nowChecked = EditorGUILayout.Toggle(wasChecked, GUILayout.Width(16f), GUILayout.Height(20f));
+                    if (nowChecked != wasChecked)
+                    {
+                        SetItemChecked(item.id, nowChecked);
                     }
 
                     string rowLabel =
@@ -531,9 +626,352 @@ namespace MCPTools.Editor
             EditorGUILayout.EndScrollView();
 
             int confirmedCount = filtered.Count(i => _confirmedPaths.ContainsKey(_document.items[i].id));
-            EditorGUILayout.LabelField($"확정 {confirmedCount}/{filtered.Count}", EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(
+                $"확정 {confirmedCount}/{filtered.Count} · 체크 {CheckedTargets().Count}개", EditorStyles.miniLabel);
 
             DrawConfirmedAssetPanel(SelectedItem());
+        }
+
+        /// <summary>
+        /// 목록 위의 일괄 생성 대상 선택 도구 모음입니다 (전체 / 해제 / 미생성만).
+        /// 선택 대상은 현재 워크플로에 해당하는 항목으로 한정합니다.
+        /// </summary>
+        /// <param name="filtered">현재 워크플로에 해당하는 항목의 문서 인덱스 목록.</param>
+        private void DrawSelectionToolbar(List<int> filtered)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField(
+                    new GUIContent("일괄 생성 대상", "체크한 항목만 [선택 항목 생성]으로 한 번에 생성합니다."),
+                    EditorStyles.miniBoldLabel, GUILayout.Width(80f));
+
+                if (GUILayout.Button("전체", EditorStyles.miniButtonLeft, GUILayout.Width(44f)))
+                {
+                    foreach (int i in filtered)
+                    {
+                        SetItemChecked(_document.items[i].id, true);
+                    }
+                }
+
+                if (GUILayout.Button("해제", EditorStyles.miniButtonMid, GUILayout.Width(44f)))
+                {
+                    _checkedItemIds.Clear();
+                }
+
+                if (GUILayout.Button(
+                        new GUIContent("미생성", "후보가 없고 확정되지 않은 항목만 체크합니다."),
+                        EditorStyles.miniButtonRight, GUILayout.Width(52f)))
+                {
+                    _checkedItemIds.Clear();
+                    foreach (int i in filtered)
+                    {
+                        PromptItem item = _document.items[i];
+                        if (IsUnrenderedTarget(item))
+                        {
+                            SetItemChecked(item.id, true);
+                        }
+                    }
+                }
+
+                GUILayout.FlexibleSpace();
+            }
+        }
+
+        /// <summary>항목의 일괄 생성 체크 상태를 설정합니다.</summary>
+        private void SetItemChecked(string itemId, bool value)
+        {
+            if (string.IsNullOrEmpty(itemId))
+            {
+                return;
+            }
+
+            if (value)
+            {
+                _checkedItemIds.Add(itemId);
+            }
+            else
+            {
+                _checkedItemIds.Remove(itemId);
+            }
+        }
+
+        /// <summary>후보도 확정본도 없고 프롬프트가 채워진(= 아직 생성하지 않은) 항목인지 판정합니다.</summary>
+        private bool IsUnrenderedTarget(PromptItem item)
+        {
+            return !string.IsNullOrEmpty(item.positive) &&
+                   !_confirmedPaths.ContainsKey(item.id) &&
+                   (!_candidateCounts.TryGetValue(item.id, out int count) || count == 0);
+        }
+
+        /// <summary>현재 워크플로에 해당하면서 체크된 항목 목록을 반환합니다.</summary>
+        private List<PromptItem> CheckedTargets()
+        {
+            if (_document == null)
+            {
+                return new List<PromptItem>();
+            }
+
+            return _document.items
+                .Where(it => _checkedItemIds.Contains(it.id) && ItemMatchesWorkflow(it))
+                .ToList();
+        }
+
+        /// <summary>현재 워크플로에 해당하는 항목 중 아직 생성하지 않은 항목 목록을 반환합니다.</summary>
+        private List<PromptItem> UnrenderedTargets()
+        {
+            if (_document == null)
+            {
+                return new List<PromptItem>();
+            }
+
+            return _document.items
+                .Where(it => ItemMatchesWorkflow(it) && IsUnrenderedTarget(it))
+                .ToList();
+        }
+
+        // ─────────────────────────── 항목 편집(별도 창) ───────────────────────────
+
+        /// <summary>
+        /// 목록 아래 한 줄짜리 항목 조작 행입니다. 추가/편집은 별도 편집 창(<see cref="PromptItemEditWindow"/>)을 띄우고,
+        /// 그 창에서 [저장]하면 이 목록에 반영됩니다. [저장]은 목록 전체를 PromptSet JSON에 기록합니다.
+        /// </summary>
+        private void DrawItemActionRow()
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button(
+                        new GUIContent("추가", "새 항목을 편집 창에서 작성해 이 목록에 추가합니다."),
+                        EditorStyles.miniButtonLeft))
+                {
+                    OpenItemEditor(null);
+                }
+
+                using (new EditorGUI.DisabledScope(SelectedItem() == null))
+                {
+                    if (GUILayout.Button(
+                            new GUIContent("편집", "선택한 항목을 편집 창에서 수정합니다."),
+                            EditorStyles.miniButtonMid))
+                    {
+                        OpenItemEditor(SelectedItem());
+                    }
+
+                    if (GUILayout.Button(
+                            new GUIContent("삭제", "선택한 항목을 목록에서 제거합니다 (생성된 후보/확정 파일은 유지)."),
+                            EditorStyles.miniButtonMid))
+                    {
+                        DeleteSelectedItem();
+                    }
+                }
+
+                using (new EditorGUI.DisabledScope(_document.items.Count == 0))
+                {
+                    if (GUILayout.Button(
+                            new GUIContent(_documentDirty ? "저장 *" : "저장",
+                                string.IsNullOrEmpty(_documentPath)
+                                    ? "Docs의 PromptSet 폴더에 새 PromptSet_*.json으로 저장합니다."
+                                    : $"{_documentPath}에 덮어씁니다."),
+                            EditorStyles.miniButtonRight))
+                    {
+                        SaveDocument(string.IsNullOrEmpty(_documentPath) ? null : _documentPath);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 항목 편집 창을 엽니다. 문서가 없으면 빈 목록을 먼저 만듭니다.
+        /// </summary>
+        /// <param name="existing">수정할 기존 항목. null이면 새 항목을 작성합니다.</param>
+        private void OpenItemEditor(PromptItem existing)
+        {
+            if (_document == null)
+            {
+                _document = new PromptSetDocument { createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm") };
+                _documentPath = string.Empty;
+                _documentDirty = false;
+                _checkedItemIds.Clear();
+                _selectedItemIndex = -1;
+                RefreshItemStatuses();
+            }
+
+            PromptItemEditWindow.Open(this, existing);
+        }
+
+        /// <summary>
+        /// 편집 창에서 쓸 새 항목 초안을 만듭니다: 새 ID와 현재 워크플로 종류(audio/ui/image)만 채우고,
+        /// positive/negative 프롬프트는 빈칸으로 둡니다 (변수 편집란의 값이 필요하면 편집 창의
+        /// [생성 창의 현재 프롬프트 가져오기]로 가져옵니다).
+        /// </summary>
+        /// <returns>새 항목 초안.</returns>
+        internal PromptItem CreateItemDraft()
+        {
+            var item = new PromptItem { id = NextItemId(), name = "새 항목" };
+
+            BridgeWorkflowInfo workflow = SelectedWorkflow();
+            if (workflow != null && workflow.name == "Audio")
+            {
+                item.assetType = "audio";
+            }
+            else if (workflow != null && workflow.name == "UI")
+            {
+                item.assetType = "ui";
+                item.isUI = true;
+            }
+
+            return item;
+        }
+
+        /// <summary>
+        /// 편집 창의 [저장] 결과를 목록에 반영합니다. 같은 ID의 항목이 있으면 교체하고, 없으면 끝에 추가한 뒤
+        /// 그 항목을 선택합니다. 목록(메모리)에만 반영되므로 파일에 남기려면 생성 창의 [저장]을 눌러야 합니다.
+        /// </summary>
+        /// <param name="edited">편집 창에서 작성한 항목.</param>
+        internal void ApplyEditedItem(PromptItem edited)
+        {
+            if (_document == null || edited == null)
+            {
+                return;
+            }
+
+            int index = _document.items.FindIndex(it => it.id == edited.id);
+            if (index >= 0)
+            {
+                _document.items[index] = edited;
+                _statusMessage = $"항목을 수정했습니다: {edited.id} ({edited.name}) — 파일에 남기려면 [저장]을 누르세요.";
+            }
+            else
+            {
+                _document.items.Add(edited);
+                index = _document.items.Count - 1;
+                _statusMessage = $"항목을 추가했습니다: {edited.id} ({edited.name}) — 파일에 남기려면 [저장]을 누르세요.";
+            }
+
+            _documentDirty = true;
+            RefreshItemStatuses();
+            SelectItem(index);
+
+            // 편집 결과를 변수 편집란에 그대로 맞춘다 (프롬프트를 비운 경우까지 반영).
+            ApplyItemPromptsToVariables(overwriteWithEmpty: true);
+            Repaint();
+        }
+
+        /// <summary>변수 편집란(role=positive/negative)의 현재 값을 항목에 복사합니다.</summary>
+        internal void CopyVariablePromptsTo(PromptItem item)
+        {
+            foreach (VariableState state in _variableStates)
+            {
+                if (state.definition.role == "positive")
+                {
+                    item.positive = state.stringValue ?? string.Empty;
+                }
+                else if (state.definition.role == "negative")
+                {
+                    item.negative = state.stringValue ?? string.Empty;
+                }
+            }
+        }
+
+        /// <summary>선택 항목을 목록에서 삭제합니다 (이미 생성된 후보/확정 파일은 지우지 않습니다).</summary>
+        private void DeleteSelectedItem()
+        {
+            PromptItem item = SelectedItem();
+            if (item == null)
+            {
+                return;
+            }
+
+            if (!EditorUtility.DisplayDialog("항목 삭제",
+                    $"{item.id} ({item.name}) 항목을 목록에서 삭제합니다.\n" +
+                    "이미 생성된 후보/확정 파일은 삭제되지 않습니다. 계속할까요?", "삭제", "취소"))
+            {
+                return;
+            }
+
+            int index = Mathf.Clamp(_selectedItemIndex, 0, _document.items.Count - 1);
+            _document.items.RemoveAt(index);
+            _checkedItemIds.Remove(item.id);
+            _documentDirty = true;
+
+            if (_candidatesItemId == item.id)
+            {
+                _candidates.Clear();
+                _candidatesItemId = string.Empty;
+                _selectedCandidateIndex = -1;
+            }
+
+            if (_document.items.Count == 0)
+            {
+                _selectedItemIndex = -1;
+                Repaint();
+                return;
+            }
+
+            SelectItem(Mathf.Clamp(index, 0, _document.items.Count - 1));
+        }
+
+        /// <summary>다음 항목 ID(item_00N)를 만듭니다 (기존 최대 번호 + 1).</summary>
+        private string NextItemId()
+        {
+            int max = 0;
+            foreach (PromptItem item in _document.items)
+            {
+                if (!string.IsNullOrEmpty(item.id) && item.id.StartsWith("item_") &&
+                    int.TryParse(item.id.Substring(5), out int n) && n > max)
+                {
+                    max = n;
+                }
+            }
+
+            return $"item_{max + 1:000}";
+        }
+
+        /// <summary>
+        /// 편집한 항목 목록을 PromptSet JSON으로 저장합니다.
+        /// </summary>
+        /// <param name="outputPath">덮어쓸 경로. null이면 Docs의 PromptSet 폴더에 새 파일로 저장합니다.</param>
+        private void SaveDocument(string outputPath)
+        {
+            if (_document == null || _document.items.Count == 0)
+            {
+                EditorUtility.DisplayDialog("ComfyUI 생성", "저장할 항목이 없습니다.", "확인");
+                return;
+            }
+
+            try
+            {
+                string saved = PromptBuilder.Save(_document, outputPath);
+                _documentPath = saved;
+                _documentDirty = false;
+
+                RefreshPromptSetPaths();
+                int index = Array.IndexOf(_promptSetPaths, saved);
+                if (index >= 0)
+                {
+                    _selectedSetIndex = index;
+                }
+
+                _statusMessage = $"저장 완료: {saved}";
+                ShowNotification(new GUIContent("항목 목록을 저장했습니다."));
+            }
+            catch (Exception e)
+            {
+                EditorUtility.DisplayDialog("저장 실패", $"PromptSet JSON 저장 중 오류가 발생했습니다.\n{e.Message}", "확인");
+            }
+        }
+
+        /// <summary>저장하지 않은 편집이 있으면 확인 다이얼로그를 띄웁니다.</summary>
+        /// <param name="actionDescription">"~하면" 형태의 동작 설명.</param>
+        /// <returns>진행해도 되면 true.</returns>
+        private bool ConfirmDiscardChanges(string actionDescription)
+        {
+            if (_document == null || !_documentDirty)
+            {
+                return true;
+            }
+
+            return EditorUtility.DisplayDialog("저장하지 않은 변경",
+                $"항목 편집 내용이 저장되지 않았습니다. {actionDescription} 변경 내용이 사라집니다.\n계속할까요?",
+                "계속", "취소");
         }
 
         /// <summary>
@@ -581,6 +1019,10 @@ namespace MCPTools.Editor
                 return;
             }
 
+            // 에셋 경로는 띄어쓰기가 없어 word-wrap이 줄을 못 나눈다. 폭을 고정하지 않으면 이 라벨의
+            // 최소 폭이 왼쪽 열을 넓혀 오른쪽 열을 창 밖으로 밀어낸다.
+            float panelWidth = CurrentLeftColumnWidth() - 26f;
+
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
                 var badgeStyle = new GUIStyle(EditorStyles.boldLabel);
@@ -593,7 +1035,8 @@ namespace MCPTools.Editor
                 if (asset == null)
                 {
                     EditorGUILayout.LabelField(
-                        $"확정 에셋 없음(삭제됨): {path}", EditorStyles.wordWrappedMiniLabel);
+                        $"확정 에셋 없음(삭제됨): {path}", EditorStyles.wordWrappedMiniLabel,
+                        GUILayout.Width(panelWidth));
                     return;
                 }
 
@@ -616,14 +1059,17 @@ namespace MCPTools.Editor
                         }
                     }
 
-                    using (new EditorGUILayout.VerticalScope())
+                    float textWidth = Mathf.Max(80f, panelWidth - previewSize - 8f);
+                    using (new EditorGUILayout.VerticalScope(GUILayout.Width(textWidth)))
                     {
                         if (asset is AudioClip)
                         {
-                            EditorGUILayout.LabelField($"♪ {Path.GetFileName(path)}", EditorStyles.miniBoldLabel);
+                            EditorGUILayout.LabelField($"♪ {Path.GetFileName(path)}", EditorStyles.miniBoldLabel,
+                                GUILayout.Width(textWidth));
                         }
 
-                        EditorGUILayout.LabelField(path, EditorStyles.wordWrappedMiniLabel);
+                        EditorGUILayout.LabelField(path, EditorStyles.wordWrappedMiniLabel,
+                            GUILayout.Width(textWidth));
                         if (GUILayout.Button("에셋 위치 보기 (Ping)", GUILayout.Width(140f), GUILayout.Height(ButtonHeight)))
                         {
                             EditorGUIUtility.PingObject(asset);
@@ -683,9 +1129,11 @@ namespace MCPTools.Editor
             _selectedItemIndex = index;
             PromptItem item = _document.items[index];
 
-            // assetType에 맞는 기본 워크플로 자동 선택 (audio→Audio, ui→UI, image→기본 이미지 워크플로)
+            // assetType에 맞는 기본 워크플로 자동 선택 (audio→Audio, ui→UI, image→기본 이미지 워크플로).
+            // 현재 워크플로가 이미 이 항목 종류에 해당하면(예: 이미지 항목 + StyleChange) 사용자의 선택을 유지한다 —
+            // 일괄 생성이 "현재 설정된 워크플로"를 쓰기 때문에 항목을 고를 때마다 기본값으로 되돌아가면 안 된다.
             string wfName = DefaultWorkflowNameFor(item);
-            int wfIndex = _workflows.FindIndex(w => w.name == wfName);
+            int wfIndex = ItemMatchesWorkflow(item) ? -1 : _workflows.FindIndex(w => w.name == wfName);
             if (wfIndex >= 0 && wfIndex != _selectedWorkflowIndex)
             {
                 _selectedWorkflowIndex = wfIndex;
@@ -1077,7 +1525,9 @@ namespace MCPTools.Editor
         }
 
         /// <summary>선택된 항목의 positive/negative 프롬프트를 role 변수에 채웁니다 (사용자 수정 가능).</summary>
-        private void ApplyItemPromptsToVariables()
+        /// <param name="overwriteWithEmpty">true면 항목의 프롬프트가 비어 있어도 그대로 덮어씁니다
+        /// (항목 편집 중 동기화용). false면 비어 있는 값은 건드리지 않습니다.</param>
+        private void ApplyItemPromptsToVariables(bool overwriteWithEmpty = false)
         {
             PromptItem item = SelectedItem();
             if (item == null)
@@ -1087,11 +1537,11 @@ namespace MCPTools.Editor
 
             foreach (VariableState state in _variableStates)
             {
-                if (state.definition.role == "positive" && !string.IsNullOrEmpty(item.positive))
+                if (state.definition.role == "positive" && (overwriteWithEmpty || !string.IsNullOrEmpty(item.positive)))
                 {
                     state.stringValue = item.positive;
                 }
-                else if (state.definition.role == "negative" && !string.IsNullOrEmpty(item.negative))
+                else if (state.definition.role == "negative" && (overwriteWithEmpty || !string.IsNullOrEmpty(item.negative)))
                 {
                     state.stringValue = item.negative;
                 }
@@ -1158,25 +1608,57 @@ namespace MCPTools.Editor
 
             using (new EditorGUI.DisabledScope(!canGenerate))
             {
-                using (new EditorGUILayout.HorizontalScope())
-                {
-                    int candidateCount = Mathf.Max(1, _settings.candidateCount);
-                    string label = _candidates.Count > 0 && _candidatesItemId == CurrentItemId()
-                        ? $"재생성 (새 시드로 {candidateCount}개)"
-                        : $"후보 {candidateCount}개 생성";
-                    if (GUILayout.Button(label, GUILayout.Height(PrimaryButtonHeight)))
-                    {
-                        StartGeneration();
-                    }
+                int candidateCount = Mathf.Max(1, _settings.candidateCount);
 
-                    using (new EditorGUI.DisabledScope(_document == null))
+                string label = _candidates.Count > 0 && _candidatesItemId == CurrentItemId()
+                    ? $"재생성 (새 시드로 {candidateCount}개)"
+                    : $"후보 {candidateCount}개 생성";
+                if (GUILayout.Button(new GUIContent(label, "선택된 항목 1개만 생성합니다."),
+                        GUILayout.Height(PrimaryButtonHeight)))
+                {
+                    StartGeneration();
+                }
+
+                List<PromptItem> checkedTargets = CheckedTargets();
+                List<PromptItem> unrendered = UnrenderedTargets();
+
+                using (new EditorGUI.DisabledScope(_document == null))
+                {
+                    // 두 일괄 버튼은 라벨이 길어 좁은 창에서 한 줄에 두면 글자가 잘린다. 폭이 부족하면 세로로 쌓는다.
+                    bool stackBatchButtons = RightContentWidth() < 520f;
+                    using (stackBatchButtons
+                               ? (IDisposable)new EditorGUILayout.VerticalScope()
+                               : new EditorGUILayout.HorizontalScope())
                     {
-                        if (GUILayout.Button("전체 생성 (미생성만)", GUILayout.Height(PrimaryButtonHeight),
-                                GUILayout.Width(160f)))
+                        using (new EditorGUI.DisabledScope(checkedTargets.Count == 0))
                         {
-                            StartBatchGeneration();
+                            if (GUILayout.Button(
+                                    new GUIContent($"선택 항목 생성 ({checkedTargets.Count}개 × {candidateCount})",
+                                        "목록에서 체크한 항목을 현재 워크플로/변수 설정으로 순서대로 생성합니다."),
+                                    GUILayout.Height(PrimaryButtonHeight), GUILayout.MinWidth(60f)))
+                            {
+                                StartBatchGeneration(checkedTargets, "선택 항목");
+                            }
+                        }
+
+                        using (new EditorGUI.DisabledScope(unrendered.Count == 0))
+                        {
+                            if (GUILayout.Button(
+                                    new GUIContent($"미생성 전체 생성 ({unrendered.Count}개 × {candidateCount})",
+                                        "후보가 없고 확정되지 않은 항목을 모두 생성합니다."),
+                                    GUILayout.Height(PrimaryButtonHeight), GUILayout.MinWidth(60f)))
+                            {
+                                StartBatchGeneration(unrendered, "미생성 항목");
+                            }
                         }
                     }
+                }
+
+                if (_document != null)
+                {
+                    EditorGUILayout.LabelField(
+                        "일괄 생성은 위 워크플로와 변수 설정을 그대로 사용합니다 (프롬프트만 항목별 값으로 대체).",
+                        EditorStyles.miniLabel);
                 }
             }
 
@@ -1224,12 +1706,15 @@ namespace MCPTools.Editor
         // ─────────────────────────── 일괄 생성 ───────────────────────────
 
         /// <summary>
-        /// 프롬프트가 있고 아직 후보가 없는(확정되지 않은) 항목들을 순차 생성합니다.
-        /// 이미 후보가 있거나 확정된 항목은 건너뜁니다.
+        /// 대상 항목들을 현재 워크플로/변수 설정으로 일괄 생성합니다.
+        /// positive 프롬프트가 비어 있는 항목은 제외하고, 이미 후보가 있거나 확정된 항목이 섞여 있으면
+        /// 기존 후보가 삭제된다는 점을 확인 다이얼로그로 안내합니다.
         /// </summary>
-        private void StartBatchGeneration()
+        /// <param name="targets">생성 대상 항목 목록.</param>
+        /// <param name="scopeLabel">확인 다이얼로그/상태 메시지에 쓸 대상 설명 (예: "선택 항목").</param>
+        private void StartBatchGeneration(List<PromptItem> targets, string scopeLabel)
         {
-            if (_document == null || _generating)
+            if (_document == null || _generating || targets == null)
             {
                 return;
             }
@@ -1243,28 +1728,47 @@ namespace MCPTools.Editor
             }
 
             RefreshItemStatuses();
-            List<PromptItem> targets = _document.items
-                .Where(it => ItemMatchesWorkflow(it) &&
-                             !string.IsNullOrEmpty(it.positive) &&
-                             !_confirmedPaths.ContainsKey(it.id) &&
-                             (!_candidateCounts.TryGetValue(it.id, out int c) || c == 0))
-                .ToList();
 
-            if (targets.Count == 0)
+            List<PromptItem> withPrompt = targets.Where(it => !string.IsNullOrEmpty(it.positive)).ToList();
+            int skipped = targets.Count - withPrompt.Count;
+            if (withPrompt.Count == 0)
             {
-                _statusMessage = "일괄 생성할 항목이 없습니다 (모든 항목이 후보 보유/확정/프롬프트 없음 상태).";
+                _statusMessage = $"일괄 생성할 항목이 없습니다 ({scopeLabel}: positive 프롬프트가 비어 있는 항목 {skipped}개 제외).";
                 return;
             }
 
-            _ = RunBatchGenerationAsync(targets);
+            BridgeWorkflowInfo workflow = SelectedWorkflow();
+            int regenerate = withPrompt.Count(it => !IsUnrenderedTarget(it));
+
+            string summary =
+                $"{scopeLabel} {withPrompt.Count}개를 워크플로 \"{(workflow != null ? workflow.name : "항목별 기본")}\"와 " +
+                $"현재 변수 설정으로 생성합니다.\n항목당 후보 {Mathf.Max(1, _settings.candidateCount)}개.";
+            if (skipped > 0)
+            {
+                summary += $"\n\npositive 프롬프트가 비어 제외되는 항목: {skipped}개";
+            }
+
+            if (regenerate > 0)
+            {
+                summary += $"\n\n이미 후보가 있거나 확정된 항목 {regenerate}개는 기존 후보가 삭제되고 새로 생성됩니다.";
+            }
+
+            if (!EditorUtility.DisplayDialog("일괄 생성", $"{summary}\n\n계속할까요?", "생성", "취소"))
+            {
+                return;
+            }
+
+            _ = RunBatchGenerationAsync(withPrompt, scopeLabel);
         }
 
         /// <summary>
-        /// 대상 항목들을 순차로 생성합니다 (항목당 후보 4개, 항목별 기본 워크플로 사용).
+        /// 대상 항목들을 순차로 생성합니다 (항목당 후보 N개, 현재 선택된 워크플로와 변수 값 사용).
         /// 실패한 항목은 기록만 하고 다음 항목을 계속 진행하며, 완료 후 실패 목록을 요약합니다.
         /// 창을 닫으면 취소됩니다.
         /// </summary>
-        private async Task RunBatchGenerationAsync(List<PromptItem> targets)
+        /// <param name="targets">생성 대상 항목 목록.</param>
+        /// <param name="scopeLabel">상태 메시지에 쓸 대상 설명.</param>
+        private async Task RunBatchGenerationAsync(List<PromptItem> targets, string scopeLabel)
         {
             EditorAudioPreview.Stop();
             _generating = true;
@@ -1278,13 +1782,20 @@ namespace MCPTools.Editor
 
             try
             {
+                // 화면에 설정된 워크플로와 변수 값을 그대로 모든 항목에 적용한다.
+                // role(positive/negative) 변수는 제외해야 항목별 프롬프트가 주입된다.
+                // 참조 이미지 업로드도 여기서 1회만 수행하고 결과 파일명을 재사용한다.
+                BridgeWorkflowInfo batchWorkflow = SelectedWorkflow();
+                Dictionary<string, object> batchVariables =
+                    await BuildVariablesAsync(_cancelSource.Token, excludePromptRoles: true);
+
                 for (int i = 0; i < targets.Count; i++)
                 {
                     _cancelSource.Token.ThrowIfCancellationRequested();
                     PromptItem item = targets[i];
                     _batchCurrent = i + 1;
                     _batchCurrentLabel = $"{item.id} {item.name}";
-                    _statusMessage = $"일괄 생성 중: {item.id} ({item.name})";
+                    _statusMessage = $"일괄 생성 중({scopeLabel}): {item.id} ({item.name})";
 
                     int captured = i;
                     var progress = new Progress<float>(p =>
@@ -1295,19 +1806,10 @@ namespace MCPTools.Editor
 
                     try
                     {
-                        string wfName = DefaultWorkflowNameFor(item);
-
-                        // 현재 선택된 워크플로와 같은 항목이면 사용자가 편집한 변수 값을 함께 사용한다
-                        // (role 프롬프트 변수는 제외해 항목별 프롬프트가 주입되게 한다).
-                        Dictionary<string, object> variables = null;
-                        BridgeWorkflowInfo selected = SelectedWorkflow();
-                        if (selected != null && selected.name == wfName)
-                        {
-                            variables = await BuildVariablesAsync(_cancelSource.Token, excludePromptRoles: true);
-                        }
+                        string wfName = batchWorkflow != null ? batchWorkflow.name : DefaultWorkflowNameFor(item);
 
                         List<CandidateInfo> generated = await CandidateGenerator.GenerateAsync(
-                            _settings, item, wfName, variables, null, progress, _cancelSource.Token);
+                            _settings, item, wfName, batchVariables, null, progress, _cancelSource.Token);
                         _candidateCounts[item.id] = generated.Count;
                         done++;
                     }
@@ -1324,8 +1826,8 @@ namespace MCPTools.Editor
                 }
 
                 _statusMessage = failures.Count == 0
-                    ? $"일괄 생성 완료: {done}/{_batchTotal}개 항목 성공."
-                    : $"일괄 생성 완료: 성공 {done}개, 실패 {failures.Count}개.";
+                    ? $"일괄 생성 완료({scopeLabel}): {done}/{_batchTotal}개 항목 성공."
+                    : $"일괄 생성 완료({scopeLabel}): 성공 {done}개, 실패 {failures.Count}개.";
 
                 if (failures.Count > 0)
                 {
@@ -1533,8 +2035,11 @@ namespace MCPTools.Editor
 
             EditorGUILayout.LabelField($"후보 ({_candidatesItemId})", EditorStyles.boldLabel);
 
-            float rightWidth = Mathf.Max(ThumbnailSize + 16f, position.width - LeftColumnWidth - 40f);
-            int columns = Mathf.Max(1, Mathf.FloorToInt(rightWidth / (ThumbnailSize + 16f)));
+            // 측정한 표시 폭 안에서만 격자를 만든다. 폭이 한 칸도 못 담을 만큼 좁으면 썸네일 자체를 줄여
+            // 가로로 넘치지 않게 한다 (가로 스크롤 없이 창 폭에 맞춤).
+            float rightWidth = RightContentWidth();
+            float cellSize = Mathf.Min(ThumbnailSize, Mathf.Max(48f, rightWidth - 16f));
+            int columns = Mathf.Max(1, Mathf.FloorToInt(rightWidth / (cellSize + 16f)));
             for (int row = 0; row * columns < _candidates.Count; row++)
             {
                 using (new EditorGUILayout.HorizontalScope())
@@ -1547,7 +2052,7 @@ namespace MCPTools.Editor
                             break;
                         }
 
-                        DrawCandidateCell(_candidates[index], index);
+                        DrawCandidateCell(_candidates[index], index, cellSize);
                     }
 
                     GUILayout.FlexibleSpace();
@@ -1568,15 +2073,16 @@ namespace MCPTools.Editor
             }
         }
 
-        private void DrawCandidateCell(CandidateInfo candidate, int index)
+        /// <param name="cellSize">썸네일 한 변의 크기 (창 폭에 맞춰 축소될 수 있습니다).</param>
+        private void DrawCandidateCell(CandidateInfo candidate, int index, float cellSize)
         {
             bool selected = index == _selectedCandidateIndex;
             bool isAudio = IsAudioCandidate(candidate.path);
 
-            using (new EditorGUILayout.VerticalScope(GUILayout.Width(ThumbnailSize + 8f)))
+            using (new EditorGUILayout.VerticalScope(GUILayout.Width(cellSize + 8f)))
             {
-                Rect rect = GUILayoutUtility.GetRect(ThumbnailSize, ThumbnailSize,
-                    GUILayout.Width(ThumbnailSize), GUILayout.Height(ThumbnailSize));
+                Rect rect = GUILayoutUtility.GetRect(cellSize, cellSize,
+                    GUILayout.Width(cellSize), GUILayout.Height(cellSize));
 
                 if (Event.current.type == EventType.Repaint)
                 {
@@ -1609,11 +2115,11 @@ namespace MCPTools.Editor
                 }
 
                 EditorGUILayout.LabelField($"시드 {candidate.seed}", EditorStyles.miniLabel,
-                    GUILayout.Width(ThumbnailSize));
+                    GUILayout.Width(cellSize));
 
                 if (!isAudio)
                 {
-                    if (GUILayout.Button("크게 보기", GUILayout.Width(ThumbnailSize), GUILayout.Height(ButtonHeight)))
+                    if (GUILayout.Button("크게 보기", GUILayout.Width(cellSize), GUILayout.Height(ButtonHeight)))
                     {
                         CandidatePreviewWindow.Open(candidate.path, candidate.seed);
                     }
@@ -1720,7 +2226,9 @@ namespace MCPTools.Editor
             {
                 using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
                 {
-                    EditorGUILayout.LabelField(_statusMessage, EditorStyles.wordWrappedLabel);
+                    // 상태 메시지에는 긴 에셋 경로가 들어간다. 폭을 창에 맞춰 고정해 창을 넓히지 않게 한다.
+                    EditorGUILayout.LabelField(_statusMessage, EditorStyles.wordWrappedLabel,
+                        GUILayout.Width(Mathf.Max(200f, position.width - 24f)));
                 }
             }
         }
@@ -1736,6 +2244,11 @@ namespace MCPTools.Editor
 
         private void LoadSelectedPromptSet()
         {
+            if (!ConfirmDiscardChanges("다른 PromptSet을 로드하면"))
+            {
+                return;
+            }
+
             string path = _promptSetPaths[Mathf.Clamp(_selectedSetIndex, 0, _promptSetPaths.Length - 1)];
             try
             {
@@ -1749,6 +2262,9 @@ namespace MCPTools.Editor
                 }
 
                 _document = doc;
+                _documentPath = path;
+                _documentDirty = false;
+                _checkedItemIds.Clear();
                 _candidates.Clear();
                 _candidatesItemId = string.Empty;
                 _selectedCandidateIndex = -1;
@@ -1829,6 +2345,315 @@ namespace MCPTools.Editor
             }
 
             return _workflows[Mathf.Clamp(_selectedWorkflowIndex, 0, _workflows.Count - 1)];
+        }
+    }
+
+    /// <summary>
+    /// 3단계 생성 창의 항목을 별도 창에서 작성/수정하는 보조 창입니다.
+    /// [저장]을 누르면 생성 창의 목록에 새 항목으로 추가되거나 같은 ID의 기존 항목이 갱신됩니다.
+    /// PromptSet JSON 파일에 남기려면 생성 창의 [저장]을 눌러야 합니다.
+    /// </summary>
+    public class PromptItemEditWindow : EditorWindow
+    {
+        private static readonly string[] AssetTypeOptions = { "image", "ui", "audio" };
+
+        [SerializeField] private ComfyUIGeneratorWindow _owner;
+        [SerializeField] private PromptItem _item;
+        [SerializeField] private bool _isNew;
+
+        private Vector2 _scroll;
+
+        // 대상 오브젝트 드롭다운 캐시: 어떤 프리팹의 계층을 읽어 만든 목록인지와 그 경로/표시 라벨.
+        // 프리팹이 바뀌면 다시 만든다 (도메인 리로드 후에도 _cachedPrefabPath가 비어 자동 재생성).
+        private string _cachedPrefabPath;
+        private List<string> _objectPaths = new List<string>();
+        private GUIContent[] _objectLabels = new GUIContent[0];
+
+        /// <summary>항목 편집 창을 엽니다.</summary>
+        /// <param name="owner">편집 결과를 반영할 생성 창.</param>
+        /// <param name="existing">수정할 기존 항목. null이면 새 항목을 작성합니다.</param>
+        public static void Open(ComfyUIGeneratorWindow owner, PromptItem existing)
+        {
+            var window = GetWindow<PromptItemEditWindow>(true);
+            window.titleContent = new GUIContent(existing == null ? "항목 추가" : "항목 편집");
+            window.minSize = new Vector2(420f, 440f);
+            window._owner = owner;
+            window._isNew = existing == null;
+
+            // 목록의 항목을 직접 건드리지 않도록 복사본을 편집한다 ([취소] 시 원본 유지).
+            window._item = existing == null
+                ? (owner != null ? owner.CreateItemDraft() : new PromptItem())
+                : Clone(existing);
+            window.Show();
+        }
+
+        private static PromptItem Clone(PromptItem source)
+        {
+            return new PromptItem
+            {
+                id = source.id,
+                name = source.name,
+                assetType = source.assetType,
+                isUI = source.isUI,
+                targetPrefabPath = source.targetPrefabPath,
+                targetObjectPath = source.targetObjectPath,
+                description = source.description,
+                positive = source.positive,
+                negative = source.negative
+            };
+        }
+
+        private void OnGUI()
+        {
+            if (_item == null)
+            {
+                EditorGUILayout.LabelField("편집할 항목이 없습니다. 창을 닫고 다시 열어주세요.", EditorStyles.miniLabel);
+                return;
+            }
+
+            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+
+            EditorGUILayout.LabelField("ID", _item.id, EditorStyles.boldLabel);
+            _item.name = EditorGUILayout.TextField("이름", _item.name);
+
+            int typeIndex = Mathf.Max(0, Array.IndexOf(AssetTypeOptions, _item.assetType));
+            _item.assetType = AssetTypeOptions[EditorGUILayout.Popup("종류", typeIndex, AssetTypeOptions)];
+            _item.isUI = EditorGUILayout.Toggle("UI 여부", _item.isUI);
+
+            DrawTargetFields();
+
+            _item.description = EditorGUILayout.TextField(
+                new GUIContent("설명", "용도 메모 (생성에는 쓰이지 않습니다)"), _item.description);
+
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("Positive 프롬프트");
+            _item.positive = EditorGUILayout.TextArea(_item.positive, GUILayout.MinHeight(90f));
+            EditorGUILayout.LabelField("Negative 프롬프트");
+            _item.negative = EditorGUILayout.TextArea(_item.negative, GUILayout.MinHeight(60f));
+
+            using (new EditorGUI.DisabledScope(_owner == null))
+            {
+                if (GUILayout.Button(
+                        new GUIContent("생성 창의 현재 프롬프트 가져오기",
+                            "생성 창의 워크플로 변수(positive/negative)에 입력해 둔 값을 이 항목에 채웁니다."),
+                        EditorStyles.miniButton))
+                {
+                    _owner.CopyVariablePromptsTo(_item);
+                    GUI.FocusControl(null);
+                }
+            }
+
+            EditorGUILayout.EndScrollView();
+
+            if (string.IsNullOrEmpty(_item.positive))
+            {
+                EditorGUILayout.HelpBox(
+                    "positive 프롬프트가 비어 있으면 이 항목은 생성 대상에서 제외됩니다.", MessageType.Warning);
+            }
+
+            if (_owner == null)
+            {
+                EditorGUILayout.HelpBox(
+                    "생성 창과의 연결이 끊어졌습니다. 이 창을 닫고 3단계 창에서 [추가]/[편집]을 다시 눌러주세요.",
+                    MessageType.Error);
+            }
+
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                if (GUILayout.Button("취소", GUILayout.Height(26f)))
+                {
+                    Close();
+                }
+
+                using (new EditorGUI.DisabledScope(_owner == null))
+                {
+                    if (GUILayout.Button(_isNew ? "저장 (목록에 추가)" : "저장 (항목에 반영)", GUILayout.Height(26f)))
+                    {
+                        Save();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 대상 프리팹/대상 오브젝트를 선택 방식으로 그립니다.
+        /// 프리팹은 프로젝트 에셋 ObjectField(끌어다 놓기·◎ 선택), 오브젝트는 그 프리팹의 계층 경로 드롭다운입니다.
+        /// </summary>
+        private void DrawTargetFields()
+        {
+            var prefab = string.IsNullOrEmpty(_item.targetPrefabPath)
+                ? null
+                : AssetDatabase.LoadAssetAtPath<GameObject>(_item.targetPrefabPath);
+
+            var picked = (GameObject)EditorGUILayout.ObjectField(
+                new GUIContent("대상 프리팹",
+                    "4단계 적용 대상 프리팹입니다. 프로젝트 창에서 끌어다 놓거나 ◎ 버튼으로 선택하세요."),
+                prefab, typeof(GameObject), false);
+            if (picked != prefab)
+            {
+                _item.targetPrefabPath = picked == null ? string.Empty : AssetDatabase.GetAssetPath(picked);
+                _item.targetObjectPath = string.Empty; // 다른 프리팹의 계층 경로는 더 이상 유효하지 않다
+                prefab = picked;
+                GUI.FocusControl(null);
+            }
+
+            // 저장된 경로의 프리팹이 삭제·이동된 경우: 값을 말없이 버리지 않고 원인과 조치를 안내한다.
+            if (prefab == null && !string.IsNullOrEmpty(_item.targetPrefabPath))
+            {
+                EditorGUILayout.HelpBox(
+                    $"저장된 프리팹 경로를 찾을 수 없습니다: {_item.targetPrefabPath}\n" +
+                    "프리팹이 삭제·이동되었을 수 있습니다. 위에서 다시 지정하거나 [경로 지우기]를 누르세요.",
+                    MessageType.Warning);
+                if (GUILayout.Button("경로 지우기", EditorStyles.miniButton, GUILayout.Width(90f)))
+                {
+                    _item.targetPrefabPath = string.Empty;
+                    _item.targetObjectPath = string.Empty;
+                }
+            }
+
+            RefreshObjectPathsIfNeeded(prefab);
+            DrawObjectPathPopup(prefab);
+        }
+
+        /// <summary>대상 프리팹이 바뀌었으면 계층 경로 드롭다운 목록을 다시 만듭니다.</summary>
+        private void RefreshObjectPathsIfNeeded(GameObject prefab)
+        {
+            string prefabPath = _item.targetPrefabPath ?? string.Empty;
+            if (_cachedPrefabPath == prefabPath)
+            {
+                return;
+            }
+
+            _cachedPrefabPath = prefabPath;
+            _objectPaths = new List<string>();
+            var labels = new List<GUIContent>();
+            if (prefab != null)
+            {
+                CollectObjectPaths(prefab.transform, _objectPaths, labels);
+            }
+
+            _objectLabels = labels.ToArray();
+        }
+
+        /// <summary>
+        /// 프리팹 루트와 모든 자식의 계층 경로를 수집합니다.
+        /// 경로는 <see cref="AssetApplier.FindTargetTransform"/>이 해석하는 형식(루트는 루트 이름,
+        /// 자식은 루트 기준 상대 경로)이며, 표시 라벨은 팝업이 "/"를 하위 메뉴로 해석하지 않도록 " › "로 바꿉니다.
+        /// </summary>
+        private static void CollectObjectPaths(Transform root, List<string> paths, List<GUIContent> labels)
+        {
+            paths.Add(root.name);
+            labels.Add(new GUIContent($"(루트) {Display(root.name)}{SlotSuffix(root)}", root.name));
+
+            for (int i = 0; i < root.childCount; i++)
+            {
+                CollectChildPaths(root.GetChild(i), string.Empty, paths, labels);
+            }
+        }
+
+        private static void CollectChildPaths(
+            Transform target, string parentPath, List<string> paths, List<GUIContent> labels)
+        {
+            string path = string.IsNullOrEmpty(parentPath) ? target.name : $"{parentPath}/{target.name}";
+            paths.Add(path);
+            labels.Add(new GUIContent($"{Display(path)}{SlotSuffix(target)}", path));
+
+            for (int i = 0; i < target.childCount; i++)
+            {
+                CollectChildPaths(target.GetChild(i), path, paths, labels);
+            }
+        }
+
+        private static string Display(string path)
+        {
+            return path.Replace("/", " › ");
+        }
+
+        /// <summary>에셋 적용 대상이 되는 컴포넌트가 있으면 라벨 뒤에 붙일 표시를 반환합니다.</summary>
+        private static string SlotSuffix(Transform target)
+        {
+            foreach (Component component in target.GetComponents<Component>())
+            {
+                if (component == null)
+                {
+                    continue;
+                }
+
+                string typeName = component.GetType().Name;
+                if (typeName == "Image" || typeName == "RawImage" ||
+                    typeName == "SpriteRenderer" || typeName == "AudioSource")
+                {
+                    return $"  [{typeName}]";
+                }
+            }
+
+            return string.Empty;
+        }
+
+        /// <summary>대상 오브젝트 계층 경로 드롭다운을 그립니다 (프리팹 미지정 시 비활성 안내).</summary>
+        private void DrawObjectPathPopup(GameObject prefab)
+        {
+            var label = new GUIContent("대상 오브젝트",
+                "프리팹 루트 기준 계층 경로입니다. 적용 가능한 컴포넌트가 있는 오브젝트에는 [Image] 같은 표시가 붙습니다.");
+
+            if (prefab == null || _objectPaths.Count == 0)
+            {
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    string shown = string.IsNullOrEmpty(_item.targetObjectPath)
+                        ? "(대상 프리팹을 먼저 선택하세요)"
+                        : _item.targetObjectPath;
+                    EditorGUILayout.Popup(label, 0, new[] { new GUIContent(shown) });
+                }
+
+                return;
+            }
+
+            int index = _objectPaths.IndexOf(_item.targetObjectPath ?? string.Empty);
+
+            // 저장된 경로가 이 프리팹에 없는 경우(계층 변경 등): 값을 지우지 않고 경고색으로 유지해 보여준다.
+            if (index < 0 && !string.IsNullOrEmpty(_item.targetObjectPath))
+            {
+                var contents = new GUIContent[_objectLabels.Length + 1];
+                contents[0] = new GUIContent($"(현재: {Display(_item.targetObjectPath)})",
+                    "이 프리팹에서 찾을 수 없는 경로입니다. 목록에서 다시 선택해주세요.");
+                Array.Copy(_objectLabels, 0, contents, 1, _objectLabels.Length);
+
+                Color previousColor = GUI.backgroundColor;
+                GUI.backgroundColor = new Color(1f, 0.4f, 0.4f);
+                int selected = EditorGUILayout.Popup(label, 0, contents);
+                GUI.backgroundColor = previousColor;
+
+                if (selected > 0)
+                {
+                    _item.targetObjectPath = _objectPaths[selected - 1];
+                }
+
+                return;
+            }
+
+            // 비어 있으면 루트(첫 항목)를 가리킨다 — 적용 시에도 빈 경로는 루트로 해석된다.
+            int newIndex = EditorGUILayout.Popup(label, Mathf.Max(0, index), _objectLabels);
+            if (newIndex != index)
+            {
+                _item.targetObjectPath = _objectPaths[Mathf.Clamp(newIndex, 0, _objectPaths.Count - 1)];
+            }
+        }
+
+        private void Save()
+        {
+            if (_owner == null)
+            {
+                return;
+            }
+
+            if (string.IsNullOrEmpty(_item.name))
+            {
+                _item.name = _item.id;
+            }
+
+            _owner.ApplyEditedItem(_item);
+            Close();
         }
     }
 }
