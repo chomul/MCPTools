@@ -10,11 +10,13 @@
 
 | 지표 | 현재(추정) | 목표 |
 |------|-----------|------|
-| 후보 4장 반복 생성 회차당 부가 대기 (모델 재로드 + 폴링 + preflight) | 약 12~45초 | 3초 이하 |
+| 후보 4장 반복 생성 회차당 부가 대기 (모델 재로드 + 폴링 + preflight) | 약 12~45초 | 3초 이하 (**신규 설치 기준** — 아래 주석) |
 | 3·4단계 창을 열어둔 상태의 리페인트당 힙 할당 | 수 KB~수백 KB (프리팹 크기 비례) | 0에 수렴 (상수) |
 | 프리팹 2,000개 프로젝트의 1단계 스캔 | 수십 초, 진행률 없음 | 절반 이하 + 진행률·취소 |
 | 동일 프리팹 10개 항목 일괄 적용 시 프리팹 저장 횟수 | 10회 | 1회 |
 | `mcptools_run_pipeline` 실행 중 에디터 응답성 | 완전 프리즈 | 프리즈 없음 |
+
+> **"회차당 부가 대기" 목표치 주석:** 이 목표는 설정 에셋이 아직 없는 **신규 설치 기준**이다. `unloadModelsAfterBatch`의 C# 기본값을 `false`로 바꿔도, **이미 `MCPToolSettings.asset`을 가진 기존 사용자**는 직렬화된 `true`가 그대로 남아 모델 재로드가 계속 발생한다(`Common/MCPToolSettings.cs:134` `GetOrCreate()`가 기존 에셋을 찾아 그대로 사용). 기존 사용자가 같은 값에 도달하려면 **S1의 1회성 마이그레이션이 적용돼야 한다**.
 
 ## 2. 감사 범위와 방법
 
@@ -43,7 +45,7 @@
 
 | # | 문제 | 증상 | 근거 (파일:줄) | 심각도 | 대응 방안 |
 |---|------|------|----------------|--------|-----------|
-| S1 | **단건 생성이 끝날 때마다 무조건 ComfyUI 모델을 언로드** → 다음 생성에서 전체 재로드 강제 | "후보 4개 생성"을 연속으로 누르는 **가장 흔한 사용 패턴**에서 매 회차 앞에 체크포인트 재로드가 붙는다. SDXL/Flux 계열 6~12GB 기준 **회차당 약 10~40초가 순수 대기로 추가**. 4장 생성이 20초인 워크플로에서는 체감 소요가 2배 이상 | `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974`(단건 `finally`에서 조건 없이 `_ = TryFreeMemoryAsync();`), 본체 `:1698-1712`, 기본값 `Common/MCPToolSettings.cs:117`(`unloadModelsAfterBatch = true`), 배포 에셋 `Common/MCPToolSettings.asset:26`(`1`), 브리지 `Server~/bridge_server.py:758-772`(`unload_models:True, free_memory:True`) | **치명** | ① 기본값을 `false`로 변경. ② 단건 경로(`:1974`)의 호출을 제거하고 **일괄 경로(`:1871`)에만 유지** — 일괄은 이미 `done > 0` 조건부라 의도에 맞다. ③ 또는 "마지막 생성 후 N분 유휴 시 언로드"로 전환. 반복 생성 회차당 10~40초 절감 |
+| S1 | **단건 생성이 끝날 때마다 무조건 ComfyUI 모델을 언로드** → 다음 생성에서 전체 재로드 강제 | "후보 4개 생성"을 연속으로 누르는 **가장 흔한 사용 패턴**에서 매 회차 앞에 체크포인트 재로드가 붙는다. SDXL/Flux 계열 6~12GB 기준 **회차당 약 10~40초가 순수 대기로 추가**. 4장 생성이 20초인 워크플로에서는 체감 소요가 2배 이상 | `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974`(단건 `finally`에서 조건 없이 `_ = TryFreeMemoryAsync();`), 본체 `:1698-1712`, 기본값 `Common/MCPToolSettings.cs:125`(`unloadModelsAfterBatch = true`), 브리지 `Server~/bridge_server.py:758-772`(`unload_models:True, free_memory:True`). **`Common/MCPToolSettings.asset`은 수정 대상이 아니다** — 저장소 루트 `.gitignore:52-53`으로 git 추적에서 제외돼 배포물에 들어가지 않으므로 고쳐도 사용자에게 전달되지 않는다. 더 중요한 건 `Common/MCPToolSettings.cs:134`(`GetOrCreate()`)가 `Assets` 범위의 기존 설정 에셋을 찾아 그대로 쓴다는 점 — **이미 설정 에셋을 가진 기존 사용자는 C# 기본값을 `false`로 바꿔도 직렬화된 `true`가 남아 절감 효과를 전혀 받지 못한다**(아래 절감치는 신규 설치 기준) | **치명** | ① 기본값(`Common/MCPToolSettings.cs:125`)을 `false`로 변경. ② 단건 경로(`:1974`)의 호출을 제거하고 **일괄 경로(`:1871`)에만 유지** — 일괄은 이미 `done > 0` 조건부라 의도에 맞다. ③ **기존 설정 에셋 사용자를 위한 1회성 마이그레이션을 함께 구현한다(필수 요구사항)** — 이것이 없으면 절감이 신규 설치에만 적용된다. 구현 방식은 Task 8이 정한다(예: `MCPToolSettings`에 `settingsVersion` 필드를 두고 이전 버전이면 1회 보정 후 저장 + 콘솔 안내, 또는 설정 창에 권장값 배지를 띄워 사용자가 직접 반영). ④ 또는 "마지막 생성 후 N분 유휴 시 언로드"로 전환. 반복 생성 회차당 10~40초 절감 |
 | S2 | **`mcptools_run_pipeline`이 항목 루프 안에서 메인 스레드를 완전히 블로킹** | 항목 수 × 생성 시간(항목당 수십 초~수 분) 동안 Unity 에디터가 통째로 얼어붙는다. 10항목이면 5~10분 무응답 — 진행률도 취소도 불가. 브리지/ComfyUI가 멈추면 무한 대기(타임아웃·취소 토큰 없음) | `Pipeline/PipelineTool.cs:106-107`(`Task.Run(() => CandidateGenerator.GenerateAsync(...)).GetAwaiter().GetResult()`, `CancellationToken` 미전달), 루프 `:91` | **치명** | `ComfyUIGenerator/ComfyUIGeneratorTool.cs:118-135`의 "즉시 started 반환 + 폴링" 잡 모델로 전환. 즉시 전환이 어렵다면 최소한 `CancellationTokenSource(jobTimeoutSeconds × count)`를 전달해 무한 블로킹을 막는다 |
 | S3 | **파이프라인 루프 안에서 항목마다 `AssetDatabase.Refresh()` 호출** | Refresh는 프로젝트 전체 변경 스캔을 유발하는 고비용 연산. 10항목이면 전체 스캔 10회 → 프로젝트 규모에 비례해 수 초~수십 초 추가 | `Pipeline/PipelineTool.cs:115`(루프 `:91` 내부) | **높음** | 루프 전체를 `AssetDatabase.StartAssetEditing()`/`StopAssetEditing()`으로 감싸고 Refresh는 루프 종료 후 1회만. 또는 해당 후보 폴더만 `ImportAsset(..., ImportRecursive)` |
 | S4 | **완료 감지 폴링이 2단(브리지 1초 + Unity 1초)으로 겹치고, 브리지는 첫 확인 전에 먼저 1초를 잠** | 실제 생성이 끝난 뒤에도 결과가 뜨기까지 **매 배치마다 최대 약 2초**(평균 1.5초)가 추가. `UI.json`처럼 steps=4인 고속 워크플로(4장 총 4~8초)에서는 **전체 소요의 25~50%가 순수 폴링 대기** | 브리지 `Server~/bridge_server.py:66`(`POLL_INTERVAL_SEC = 1.0`), `:471-476`(`while pending:` 진입 직후 확인보다 **먼저** `time.sleep`), Unity `ComfyUIGenerator/CandidateGenerator.cs:174-190`, `:189`(`Task.Delay(1초)`) | **높음** | ① `time.sleep`을 루프 **끝**으로 옮겨 첫 확인을 즉시 수행. ② `POLL_INTERVAL_SEC`을 0.25~0.4초로 하향(localhost `/history`는 저비용). ③ Unity 폴링은 0.3초 시작 + 지수 백오프. 배치당 1~2초 절감 |
@@ -148,8 +150,9 @@
 
 ### 7.1 1순위 — 효과 대비 비용이 가장 좋은 것 (치명 + 즉효)
 
-1. **[S1] 모델 언로드 기본값·호출 위치 수정** — `unloadModelsAfterBatch` 기본값 `false` + 단건 경로 호출 제거. 사실상 몇 줄 변경으로 **반복 생성 회차당 10~40초 절감**. 가장 먼저 한다.
-   - 대상: `Common/MCPToolSettings.cs:117`, `Common/MCPToolSettings.asset:26`, `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974`
+1. **[S1] 모델 언로드 기본값·호출 위치 수정 + 기존 설정 에셋 마이그레이션** — `unloadModelsAfterBatch` 기본값 `false` + 단건 경로 호출 제거 + **1회성 마이그레이션**. 사실상 몇 줄 변경으로 **반복 생성 회차당 10~40초 절감**. 가장 먼저 한다.
+   - 대상: `Common/MCPToolSettings.cs:125`, `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974` — `Common/MCPToolSettings.asset`은 `.gitignore:52-53`으로 배포 제외되는 로컬 파일이라 **수정 대상이 아니다**
+   - **마이그레이션을 작업 범위에 포함한다.** `Common/MCPToolSettings.cs:134`(`GetOrCreate()`)가 기존 설정 에셋을 그대로 쓰므로, 마이그레이션 없이는 **이미 에셋을 가진 기존 사용자에게 절감이 적용되지 않는다**. 방식은 자유(예: `settingsVersion` 필드 + 1회 보정 후 저장 + 콘솔 안내, 또는 설정 창의 권장값 배지)
 2. **[S2] `PipelineTool` 메인 스레드 블로킹 제거** — 잡 모델 전환(또는 최소한 취소 토큰·타임아웃 전달). 에디터 프리즈 제거.
    - 대상: `Pipeline/PipelineTool.cs:104-118`
 3. **[C1 + C2 + M1] 4단계 창 리페인트 캐시화** — 현재 값·경로 목록을 `ItemState`에 캐시하고 `SerializedObject`를 `using`으로 감싼다. 치명 3건이 한 번에 해결된다.
@@ -196,7 +199,7 @@
 
 **B. 속도**
 
-7. 동일 항목으로 "후보 4개 생성"을 **연속 3회** 실행하고 회차별 소요 시간 측정 → 2·3회차가 1회차와 비슷해야 함(모델 재로드 없음). 개선 전후를 함께 기록 (S1).
+7. 동일 항목으로 "후보 4개 생성"을 **연속 3회** 실행하고 회차별 소요 시간 측정 → 2·3회차가 1회차와 비슷해야 함(모델 재로드 없음). 개선 전후를 함께 기록. **신규 설치(설정 에셋 없음)뿐 아니라 `unloadModelsAfterBatch=true`가 직렬화된 기존 설정 에셋이 있는 상태에서도 측정**해 마이그레이션이 실제로 동작하는지 확인한다 (S1).
 8. steps=4 고속 워크플로(`UI.json`)로 생성 → 마지막 이미지 완료 후 UI 반영까지 **0.5초 이내** (S4).
 9. `mcptools_run_pipeline`을 10항목으로 실행 → 실행 중 **에디터 창을 드래그·스크롤할 수 있어야 함** (S2), 총 소요 시간이 개선 전 대비 단축 (S3).
 10. 브리지 로그·`/workflows` 응답 시간 측정 → 두 번째 호출부터 캐시 적중으로 즉시 응답 (S5/S6).

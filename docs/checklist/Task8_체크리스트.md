@@ -23,8 +23,11 @@
 ## 1. 1순위 구현 (치명 + 즉효)
 
 - [ ] **[S1]** 모델 언로드 기본값·호출 위치 수정 — `unloadModelsAfterBatch` 기본값 `false`, 단건 생성 경로의 `TryFreeMemoryAsync()` 호출 제거(일괄 경로만 유지)
-  - 대상: `Common/MCPToolSettings.cs:117`, `Common/MCPToolSettings.asset:26`, `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974`
-  - 측정: 연속 3회 생성 회차별 소요 시간 (개선 전 → 개선 후)
+  - 대상: `Common/MCPToolSettings.cs:125`, `ComfyUIGenerator/ComfyUIGeneratorWindow.cs:1974` — `Common/MCPToolSettings.asset`은 `.gitignore:52-53`으로 배포 제외되는 로컬 파일이라 수정 대상이 아님
+  - [ ] 기존 설정 에셋 사용자용 **1회성 마이그레이션** 구현 — `MCPToolSettings.cs:134`(`GetOrCreate()`)가 기존 에셋을 그대로 쓰므로 마이그레이션 없이는 절감이 신규 설치에만 적용됨. 방식은 자유(예: `settingsVersion` 필드 + 1회 보정 후 저장 + 콘솔 안내, 또는 설정 창 권장값 배지)
+  - [ ] **기존 설정 에셋(`unloadModelsAfterBatch=true`)이 있는 상태에서 검증** — 마이그레이션 후 연속 생성에서 모델 재로드가 사라지는지 확인 (신규 설치 상태와 별도로 측정)
+  - [ ] `Assets/MCPTools/README.md`에 VRAM 트레이드오프 기록 — 기본값 `false`로 인한 VRAM 상시 점유와 설정으로 되돌리는 방법
+  - 측정: 연속 3회 생성 회차별 소요 시간 (개선 전 → 개선 후) — 신규 설치 / 기존 설정 에셋 두 조건 모두
 - [ ] **[S2]** `PipelineTool` 메인 스레드 블로킹 제거 — 잡 모델 전환 또는 취소 토큰·타임아웃 전달
   - 대상: `Pipeline/PipelineTool.cs:104-118`
 - [ ] **[C1 + C2 + M1]** 4단계 창 리페인트 캐시화 + `SerializedObject` `using` 처리
