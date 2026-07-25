@@ -10,7 +10,8 @@ namespace MCPTools.Editor
     /// 스프라이트 시트 창입니다. (메뉴: Tools/MCP/Sprite Sheet)
     /// 레퍼런스 이미지 첨부 전제의 멀티 행(동작별 Row) 통합 시트 프롬프트를 조립해
     /// 미리보기/클립보드 복사/JSON 저장하고, 외부 AI가 생성한 시트 png를
-    /// 같은 행 정의로 배경 제거·정규화 임포트하는 섹션을 제공합니다.
+    /// 같은 행 정의로 배경 제거·정규화 임포트하며, 슬라이스된 시트에서 동작별
+    /// AnimationClip(+ AnimatorController·프리팹 연결)을 만드는 섹션을 제공합니다.
     /// </summary>
     public class SpriteSheetPromptWizard : EditorWindow
     {
@@ -18,7 +19,14 @@ namespace MCPTools.Editor
         private static readonly string[] DirectionLabels = { "오른쪽 (RIGHT)", "왼쪽 (LEFT)" };
         private static readonly string[] BackgroundLabels = { "흰색 단색 (임포트 시 제거)", "투명" };
 
+        /// <summary>검출 결과 표에서 동작명을 채워 넣는 프리셋 선택 목록입니다. (0번은 선택 안 함)</summary>
+        private static readonly string[] ActionPresetOptions =
+            { "프리셋...", "walk", "run", "attack", "idle", "death" };
+
         private const float PrimaryButtonHeight = 30f;
+
+        /// <summary>검출 결과 표의 프레임 썸네일 한 변 크기(px)입니다.</summary>
+        private const float ThumbnailSize = 56f;
 
         /// <summary>행 편집 UI 상태 (프리셋 인덱스 + 직접 입력값 + 프레임 수).</summary>
         [Serializable]
@@ -59,6 +67,44 @@ namespace MCPTools.Editor
         private string _importImagePath = string.Empty;
         private string _importResultMessage = string.Empty;
 
+        /// <summary>임포트 전용 행 목록입니다. 1번 프롬프트 섹션의 행 목록과 분리되어 있습니다.</summary>
+        private List<RowEntry> _importRows;
+
+        /// <summary>[배경 제거 + 격자 검출] 결과입니다. [슬라이스 적용] 전까지 프로젝트에 아무것도 기록하지 않습니다.</summary>
+        private SpriteSheetDetection _detection;
+
+        /// <summary>검출 결과 표의 프레임 썸네일입니다. (행→셀 순서로 평탄화, 창이 닫히거나 재검출 시 해제)</summary>
+        private readonly List<Texture2D> _thumbnails = new List<Texture2D>();
+
+        private string _detectMessage = string.Empty;
+
+        // 애니메이션 섹션 상태
+        /// <summary>클립 커브가 가리킬 대상 컴포넌트 선택 라벨입니다.</summary>
+        private static readonly string[] ClipComponentLabels = { "SpriteRenderer (2D)", "Image (uGUI)" };
+
+        /// <summary>클립을 만들 슬라이스 완료 시트입니다. (슬라이스 적용 직후 자동으로 채워집니다)</summary>
+        private Texture2D _clipSheet;
+
+        /// <summary>스캔한 동작(=클립) 목록입니다. null이면 아직 스캔하지 않은 상태입니다.</summary>
+        private SpriteSheetClipPlan _clipPlan;
+
+        private string _clipScanMessage = string.Empty;
+        private string _clipResultMessage = string.Empty;
+        private int _clipFrameRate = 12;
+        private int _clipComponentIndex;
+        private GameObject _clipTargetPrefab;
+
+        /// <summary>대상 프리팹의 계층 경로 목록입니다 (0번은 루트 = 빈 경로).</summary>
+        private string[] _clipObjectLabels = { "(프리팹 루트)" };
+
+        private int _clipObjectIndex;
+
+        /// <summary>
+        /// 버튼 클릭으로 예약된 임포트 섹션 동작입니다. 행·표가 늘고 줄어 IMGUI 레이아웃이 어긋나지 않도록
+        /// 다음 Layout 이벤트에서 실행합니다.
+        /// </summary>
+        private Action _pendingImportAction;
+
         /// <summary>스프라이트 시트 창(프롬프트 생성 + 시트 임포트)을 엽니다.</summary>
         [MenuItem("Tools/MCP/Sprite Sheet", false, 50)]
         public static void Open()
@@ -82,6 +128,13 @@ namespace MCPTools.Editor
                 };
             }
 
+            if (_importRows == null || _importRows.Count == 0)
+            {
+                // 임포트 행 목록은 1번 섹션과 독립이다. 실제로 임포트할 시트에 맞춰 사용자가 지정한다.
+                _importRows = new List<RowEntry> { new RowEntry { presetIndex = 0, frameCount = 8 } };
+            }
+
+            _clipFrameRate = Mathf.Max(1, MCPToolSettings.GetOrCreate().spriteAnimationFrameRate);
             RefreshAiToolList(false);
         }
 
@@ -92,10 +145,20 @@ namespace MCPTools.Editor
             {
                 _aiCancelSource.Cancel();
             }
+
+            ClearDetection();
         }
 
         private void OnGUI()
         {
+            // 예약된 임포트 동작은 레이아웃이 확정되기 전(Layout 이벤트)에 처리한다.
+            if (_pendingImportAction != null && Event.current.type == EventType.Layout)
+            {
+                Action action = _pendingImportAction;
+                _pendingImportAction = null;
+                action();
+            }
+
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
 
             DrawPromptForm();
@@ -103,6 +166,8 @@ namespace MCPTools.Editor
             DrawPromptResult();
             EditorGUILayout.Space(10f);
             DrawImportSection();
+            EditorGUILayout.Space(10f);
+            DrawAnimationSection();
 
             EditorGUILayout.EndScrollView();
         }
@@ -135,7 +200,7 @@ namespace MCPTools.Editor
 
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.LabelField("동작 행 목록 (시트의 위 행부터 순서대로)", EditorStyles.boldLabel);
-                DrawRowList();
+                DrawRowList(_rows, true, false);
 
                 EditorGUILayout.Space(4f);
                 _cellSize = Mathf.Max(32, EditorGUILayout.IntField("셀 크기 (px)", _cellSize));
@@ -221,12 +286,18 @@ namespace MCPTools.Editor
             Repaint();
         }
 
-        private void DrawRowList()
+        /// <summary>행 편집 목록을 그립니다. (프롬프트용/임포트용 공용)</summary>
+        /// <param name="rows">편집할 행 목록.</param>
+        /// <param name="showFrameCount">프레임 수 입력란 표시 여부 (임포트 행은 격자 검출이 프레임 수를 정하므로 false).</param>
+        /// <param name="showReorder">▲▼ 순서 변경 버튼 표시 여부.</param>
+        private void DrawRowList(List<RowEntry> rows, bool showFrameCount, bool showReorder)
         {
             int removeIndex = -1;
-            for (int i = 0; i < _rows.Count; i++)
+            int moveIndex = -1;
+            int moveOffset = 0;
+            for (int i = 0; i < rows.Count; i++)
             {
-                RowEntry row = _rows[i];
+                RowEntry row = rows[i];
                 using (new EditorGUILayout.HorizontalScope())
                 {
                     EditorGUILayout.LabelField($"행 {i + 1}", GUILayout.Width(36f));
@@ -236,10 +307,34 @@ namespace MCPTools.Editor
                         row.customAction = EditorGUILayout.TextField(row.customAction, GUILayout.MinWidth(80f));
                     }
 
-                    EditorGUILayout.LabelField("프레임", GUILayout.Width(44f));
-                    row.frameCount = Mathf.Clamp(EditorGUILayout.IntField(row.frameCount, GUILayout.Width(40f)), 1, SpriteSheetPromptBuilder.MaxFrameCount);
+                    if (showFrameCount)
+                    {
+                        EditorGUILayout.LabelField("프레임", GUILayout.Width(44f));
+                        row.frameCount = Mathf.Clamp(EditorGUILayout.IntField(row.frameCount, GUILayout.Width(40f)), 1, SpriteSheetPromptBuilder.MaxFrameCount);
+                    }
 
-                    using (new EditorGUI.DisabledScope(_rows.Count <= 1))
+                    if (showReorder)
+                    {
+                        using (new EditorGUI.DisabledScope(i == 0))
+                        {
+                            if (GUILayout.Button("▲", GUILayout.Width(24f)))
+                            {
+                                moveIndex = i;
+                                moveOffset = -1;
+                            }
+                        }
+
+                        using (new EditorGUI.DisabledScope(i == rows.Count - 1))
+                        {
+                            if (GUILayout.Button("▼", GUILayout.Width(24f)))
+                            {
+                                moveIndex = i;
+                                moveOffset = 1;
+                            }
+                        }
+                    }
+
+                    using (new EditorGUI.DisabledScope(rows.Count <= 1))
                     {
                         if (GUILayout.Button("-", GUILayout.Width(24f)))
                         {
@@ -251,31 +346,44 @@ namespace MCPTools.Editor
 
             if (removeIndex >= 0)
             {
-                _rows.RemoveAt(removeIndex);
+                rows.RemoveAt(removeIndex);
+            }
+            else if (moveIndex >= 0)
+            {
+                RowEntry moved = rows[moveIndex];
+                rows.RemoveAt(moveIndex);
+                rows.Insert(Mathf.Clamp(moveIndex + moveOffset, 0, rows.Count), moved);
             }
 
             if (GUILayout.Button("+ 행 추가"))
             {
-                _rows.Add(new RowEntry { presetIndex = 0, frameCount = 8 });
+                rows.Add(new RowEntry { presetIndex = 0, frameCount = 8 });
             }
         }
 
-        /// <summary>UI 행 목록을 빌더/임포터 공용 행 정의로 변환합니다.</summary>
+        /// <summary>행 편집 항목의 동작명을 구합니다. (직접 입력 선택 시 입력값, 비어 있으면 빈 문자열)</summary>
+        private static string ResolveAction(RowEntry row)
+        {
+            string action = row.presetIndex == ActionLabels.Length - 1
+                ? row.customAction
+                : SpriteSheetPromptBuilder.ActionPresets[row.presetIndex];
+            return string.IsNullOrWhiteSpace(action) ? string.Empty : action.Trim();
+        }
+
+        /// <summary>1번 프롬프트 섹션의 행 목록을 빌더용 행 정의로 변환합니다.</summary>
         private List<SpriteSheetRowDef> BuildRowDefs()
         {
             var defs = new List<SpriteSheetRowDef>();
             for (int i = 0; i < _rows.Count; i++)
             {
                 RowEntry row = _rows[i];
-                string action = row.presetIndex == ActionLabels.Length - 1
-                    ? row.customAction
-                    : SpriteSheetPromptBuilder.ActionPresets[row.presetIndex];
-                if (string.IsNullOrWhiteSpace(action))
+                string action = ResolveAction(row);
+                if (string.IsNullOrEmpty(action))
                 {
                     throw new InvalidOperationException($"행 {i + 1}의 동작명을 입력해주세요 (직접 입력 선택 시 필수).");
                 }
 
-                defs.Add(new SpriteSheetRowDef(action.Trim(), row.frameCount));
+                defs.Add(new SpriteSheetRowDef(action, row.frameCount));
             }
 
             return defs;
@@ -446,15 +554,56 @@ namespace MCPTools.Editor
                 }
 
                 EditorGUILayout.HelpBox(
-                    "위 1번 섹션의 동작 행 목록과 배경 설정을 그대로 사용합니다.\n" +
+                    "배경 설정은 위 1번 섹션 값을 사용하고, 동작 행 목록은 아래 임포트 전용 목록을 사용합니다.\n" +
                     "배경이 흰색이면 외곽 flood-fill로 배경·격자선만 투명화한 뒤, " +
                     "시트에 그려진 격자 간격대로 셀을 나누고 셀 내 위치를 보존해 임포트합니다.", MessageType.None);
 
+                EditorGUILayout.Space(4f);
+                EditorGUILayout.LabelField("임포트 행 목록 (시트의 위 행부터 순서대로)", EditorStyles.boldLabel);
+                DrawRowList(_importRows, false, true);
+                if (GUILayout.Button("1번 행 목록 가져오기"))
+                {
+                    _pendingImportAction = CopyRowsFromPromptSection;
+                }
+
+                EditorGUILayout.Space(4f);
                 using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(_importImagePath)))
                 {
-                    if (GUILayout.Button("배경 제거 + 정규화 + 임포트", GUILayout.Height(PrimaryButtonHeight)))
+                    if (GUILayout.Button("배경 제거 + 격자 검출", GUILayout.Height(PrimaryButtonHeight)))
                     {
-                        RunImport();
+                        _pendingImportAction = RunDetect;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_detectMessage))
+                {
+                    EditorGUILayout.HelpBox(_detectMessage, MessageType.None);
+                }
+
+                if (_detection != null)
+                {
+                    DrawDetectionTable();
+
+                    string problem = SpriteSheetImporter.ValidateForApply(_detection);
+                    if (problem != null)
+                    {
+                        EditorGUILayout.HelpBox(problem, MessageType.Warning);
+                    }
+
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        using (new EditorGUI.DisabledScope(problem != null))
+                        {
+                            if (GUILayout.Button("슬라이스 적용", GUILayout.Height(PrimaryButtonHeight)))
+                            {
+                                _pendingImportAction = RunApplySlices;
+                            }
+                        }
+
+                        if (GUILayout.Button("검출 결과 지우기", GUILayout.Height(PrimaryButtonHeight), GUILayout.Width(120f)))
+                        {
+                            _pendingImportAction = ClearDetectionAndMessage;
+                        }
                     }
                 }
 
@@ -465,31 +614,472 @@ namespace MCPTools.Editor
             }
         }
 
-        private void RunImport()
+        /// <summary>
+        /// 4번 애니메이션 섹션: 슬라이스된 시트의 동작별 AnimationClip 생성(+ AnimatorController·프리팹 연결) UI입니다.
+        /// </summary>
+        private void DrawAnimationSection()
+        {
+            EditorGUILayout.LabelField("4. 애니메이션 (클립 / Animator)", EditorStyles.boldLabel);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    var picked = (Texture2D)EditorGUILayout.ObjectField(
+                        "슬라이스된 시트", _clipSheet, typeof(Texture2D), false);
+                    if (picked != _clipSheet)
+                    {
+                        _clipSheet = picked;
+                        _pendingImportAction = ScanClipActions;
+                    }
+
+                    using (new EditorGUI.DisabledScope(_clipSheet == null))
+                    {
+                        if (GUILayout.Button("동작 스캔", GUILayout.Width(80f)))
+                        {
+                            _pendingImportAction = ScanClipActions;
+                        }
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_clipScanMessage))
+                {
+                    EditorGUILayout.HelpBox(_clipScanMessage, MessageType.None);
+                }
+
+                if (_clipPlan == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "슬라이스가 끝난 시트를 지정하면 스프라이트 이름({동작}_{번호})을 읽어 동작 목록을 만듭니다. " +
+                        "위 [슬라이스 적용]을 실행하면 그 시트가 자동으로 지정됩니다.", MessageType.None);
+                    return;
+                }
+
+                DrawClipActionTable();
+
+                EditorGUILayout.Space(4f);
+                _clipFrameRate = Mathf.Clamp(EditorGUILayout.IntField("프레임 레이트 (fps)", _clipFrameRate), 1, 120);
+                _clipComponentIndex = EditorGUILayout.Popup("대상 컴포넌트", _clipComponentIndex, ClipComponentLabels);
+
+                var prefab = (GameObject)EditorGUILayout.ObjectField(
+                    "대상 프리팹 (선택)", _clipTargetPrefab, typeof(GameObject), false);
+                if (prefab != _clipTargetPrefab)
+                {
+                    _clipTargetPrefab = prefab;
+                    _pendingImportAction = RefreshClipObjectList;
+                }
+
+                using (new EditorGUI.DisabledScope(_clipTargetPrefab == null))
+                {
+                    _clipObjectIndex = EditorGUILayout.Popup(
+                        "대상 오브젝트", Mathf.Clamp(_clipObjectIndex, 0, _clipObjectLabels.Length - 1), _clipObjectLabels);
+                }
+
+                EditorGUILayout.HelpBox(
+                    "클립은 Assets/Generated/3_Confirmed/Animations/{시트이름}/{동작}.anim에 만들어집니다. " +
+                    "같은 경로에 클립이 있으면 새로 만들지 않고 커브·프레임 레이트·루프 설정만 덮어씁니다.\n" +
+                    "Animator는 프리팹 루트에 붙고, 스프라이트 커브 경로는 위에서 고른 대상 오브젝트(루트 기준 경로)가 됩니다.",
+                    MessageType.None);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button("클립 생성", GUILayout.Height(PrimaryButtonHeight)))
+                    {
+                        _pendingImportAction = () => RunBuildClips(false);
+                    }
+
+                    if (GUILayout.Button("클립 + Animator 생성", GUILayout.Height(PrimaryButtonHeight)))
+                    {
+                        _pendingImportAction = () => RunBuildClips(true);
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_clipResultMessage))
+                {
+                    EditorGUILayout.HelpBox(_clipResultMessage, MessageType.Info);
+                }
+            }
+        }
+
+        /// <summary>동작 표: 동작명 / 프레임 수 / 루프 토글 / 클립 생성 체크박스를 그립니다.</summary>
+        private void DrawClipActionTable()
+        {
+            EditorGUILayout.Space(2f);
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.LabelField("동작", EditorStyles.miniBoldLabel, GUILayout.MinWidth(80f));
+                EditorGUILayout.LabelField("프레임", EditorStyles.miniBoldLabel, GUILayout.Width(50f));
+                EditorGUILayout.LabelField("루프", EditorStyles.miniBoldLabel, GUILayout.Width(46f));
+                EditorGUILayout.LabelField("생성", EditorStyles.miniBoldLabel, GUILayout.Width(46f));
+                EditorGUILayout.LabelField("기존 클립", EditorStyles.miniBoldLabel, GUILayout.Width(70f));
+            }
+
+            foreach (SpriteSheetActionGroup group in _clipPlan.groups)
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField(group.action, GUILayout.MinWidth(80f));
+                    EditorGUILayout.LabelField($"{group.frameCount}개", GUILayout.Width(50f));
+                    group.loop = EditorGUILayout.Toggle(group.loop, GUILayout.Width(46f));
+                    group.include = EditorGUILayout.Toggle(group.include, GUILayout.Width(46f));
+                    EditorGUILayout.LabelField(
+                        group.clipExists ? "덮어씀" : "새로 만듦", EditorStyles.miniLabel, GUILayout.Width(70f));
+                }
+            }
+
+            if (_clipPlan.skipped.Count > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "건너뛴 항목:\n- " + string.Join("\n- ", _clipPlan.skipped), MessageType.Warning);
+            }
+        }
+
+        /// <summary>지정한 시트의 서브 스프라이트를 훑어 동작 목록을 만듭니다. (프로젝트에는 기록하지 않습니다)</summary>
+        private void ScanClipActions()
+        {
+            _clipPlan = null;
+            _clipResultMessage = string.Empty;
+            if (_clipSheet == null)
+            {
+                _clipScanMessage = string.Empty;
+                return;
+            }
+
+            try
+            {
+                _clipPlan = SpriteSheetClipBuilder.Scan(AssetDatabase.GetAssetPath(_clipSheet));
+                var summaries = new List<string>();
+                foreach (SpriteSheetActionGroup group in _clipPlan.groups)
+                {
+                    summaries.Add($"{group.action} {group.frameCount}");
+                }
+
+                _clipScanMessage =
+                    $"동작 {_clipPlan.groups.Count}개 검출: {string.Join(", ", summaries)}\n" +
+                    $"출력 폴더: {_clipPlan.outputFolder}";
+            }
+            catch (Exception e)
+            {
+                _clipScanMessage = string.Empty;
+                EditorUtility.DisplayDialog("동작 스캔 실패", e.Message, "확인");
+            }
+        }
+
+        /// <summary>대상 프리팹의 계층 경로 목록을 다시 만듭니다. (0번은 루트 = 빈 경로)</summary>
+        private void RefreshClipObjectList()
+        {
+            _clipObjectIndex = 0;
+            if (_clipTargetPrefab == null)
+            {
+                _clipObjectLabels = new[] { "(프리팹 루트)" };
+                return;
+            }
+
+            var labels = new List<string> { "(프리팹 루트)" };
+            foreach (Transform child in _clipTargetPrefab.GetComponentsInChildren<Transform>(true))
+            {
+                if (child == _clipTargetPrefab.transform)
+                {
+                    continue;
+                }
+
+                var path = new List<string>();
+                for (Transform current = child; current != null && current != _clipTargetPrefab.transform;
+                     current = current.parent)
+                {
+                    path.Insert(0, current.name);
+                }
+
+                labels.Add(string.Join("/", path));
+            }
+
+            _clipObjectLabels = labels.ToArray();
+        }
+
+        /// <summary>동작 표대로 클립을 만듭니다. 기존 클립이 있으면 덮어쓰기 확인을 먼저 받습니다.</summary>
+        /// <param name="createController">true면 AnimatorController 생성 + (지정 시) 프리팹 연결까지 수행합니다.</param>
+        private void RunBuildClips(bool createController)
+        {
+            if (_clipPlan == null)
+            {
+                return;
+            }
+
+            try
+            {
+                List<string> existing = _clipPlan.ExistingClipPaths();
+                if (existing.Count > 0 && !EditorUtility.DisplayDialog(
+                        "기존 클립 덮어쓰기",
+                        $"이미 있는 클립 {existing.Count}개의 커브·프레임 레이트·루프 설정을 덮어씁니다.\n" +
+                        "(클립 에셋 자체와 붙여 둔 애니메이션 이벤트는 유지됩니다)\n\n" +
+                        string.Join("\n", existing),
+                        "덮어쓰기", "취소"))
+                {
+                    return;
+                }
+
+                string prefabPath = _clipTargetPrefab != null
+                    ? AssetDatabase.GetAssetPath(_clipTargetPrefab)
+                    : string.Empty;
+                string objectPath = _clipTargetPrefab != null && _clipObjectIndex > 0 &&
+                                    _clipObjectIndex < _clipObjectLabels.Length
+                    ? _clipObjectLabels[_clipObjectIndex]
+                    : string.Empty;
+                string component = _clipComponentIndex == 1
+                    ? SpriteSheetClipBuilder.ImageComponent
+                    : SpriteSheetClipBuilder.SpriteRendererComponent;
+
+                SpriteSheetClipBuildResult result = SpriteSheetClipBuilder.Build(
+                    _clipPlan, _clipFrameRate, component, createController, prefabPath, objectPath);
+
+                var lines = new List<string>();
+                foreach (SpriteSheetActionGroup group in result.groups)
+                {
+                    lines.Add($"{(group.created ? "생성" : "갱신")}: {group.clipPath} " +
+                              $"({group.frameCount}프레임, 루프 {(group.loop ? "ON" : "OFF")})");
+                }
+
+                if (!string.IsNullOrEmpty(result.controllerPath))
+                {
+                    lines.Add($"컨트롤러: {result.controllerPath}" +
+                              (result.addedStates.Count > 0
+                                  ? $" (State 추가: {string.Join(", ", result.addedStates)})"
+                                  : " (추가된 State 없음)"));
+                }
+
+                if (result.prefabLinked)
+                {
+                    lines.Add($"프리팹 연결: {result.prefabPath} (Animator + 컨트롤러)");
+                }
+
+                if (result.skipped.Count > 0)
+                {
+                    lines.Add("건너뜀:\n- " + string.Join("\n- ", result.skipped));
+                }
+
+                _clipResultMessage = string.Join("\n", lines);
+                EditorGUIUtility.PingObject(
+                    AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(result.groups[0].clipPath));
+            }
+            catch (Exception e)
+            {
+                _clipResultMessage = string.Empty;
+                EditorUtility.DisplayDialog("클립 생성 실패", e.Message, "확인");
+            }
+        }
+
+        /// <summary>1번 프롬프트 섹션의 행 목록을 임포트 행 목록으로 복사합니다. (동작명·프레임 수 그대로)</summary>
+        private void CopyRowsFromPromptSection()
+        {
+            _importRows.Clear();
+            foreach (RowEntry row in _rows)
+            {
+                _importRows.Add(new RowEntry
+                {
+                    presetIndex = row.presetIndex,
+                    customAction = row.customAction,
+                    frameCount = row.frameCount
+                });
+            }
+
+            if (_importRows.Count == 0)
+            {
+                _importRows.Add(new RowEntry { presetIndex = 0, frameCount = 8 });
+            }
+
+            GUI.FocusControl(null);
+        }
+
+        /// <summary>검출 결과 표: 행별 프레임 수·동작명 입력·프레임 썸네일과 포함 체크박스를 그립니다.</summary>
+        private void DrawDetectionTable()
+        {
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.LabelField("검출 결과 (확인 후 [슬라이스 적용])", EditorStyles.boldLabel);
+            EditorGUILayout.LabelField(
+                "\"비어 보임\" 프레임은 자동으로 제외됩니다. 실제 콘텐츠면 체크해 되살리세요.",
+                EditorStyles.miniLabel);
+
+            int thumbIndex = 0;
+            for (int r = 0; r < _detection.rows.Count; r++)
+            {
+                SpriteSheetDetectedRow row = _detection.rows[r];
+                using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+                {
+                    using (new EditorGUILayout.HorizontalScope())
+                    {
+                        EditorGUILayout.LabelField(
+                            $"행 {r + 1}  프레임 {row.IncludedFrameCount}/{row.cells.Count}", GUILayout.Width(120f));
+                        EditorGUILayout.LabelField("동작명", GUILayout.Width(44f));
+                        row.action = EditorGUILayout.TextField(row.action ?? string.Empty);
+                        int preset = EditorGUILayout.Popup(0, ActionPresetOptions, GUILayout.Width(80f));
+                        if (preset > 0)
+                        {
+                            row.action = ActionPresetOptions[preset];
+                            GUI.FocusControl(null);
+                        }
+                    }
+
+                    int perLine = Mathf.Max(1, (int)((position.width - 60f) / (ThumbnailSize + 14f)));
+                    int frameNo = 0;
+                    for (int i = 0; i < row.cells.Count; i++)
+                    {
+                        if (i % perLine == 0)
+                        {
+                            EditorGUILayout.BeginHorizontal();
+                        }
+
+                        SpriteSheetDetectedCell cell = row.cells[i];
+                        if (cell.include)
+                        {
+                            frameNo++;
+                        }
+
+                        DrawDetectedCell(cell, thumbIndex, frameNo);
+                        thumbIndex++;
+
+                        if (i % perLine == perLine - 1 || i == row.cells.Count - 1)
+                        {
+                            EditorGUILayout.EndHorizontal();
+                        }
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 프레임 셀 1개(썸네일 + 포함 체크박스 + 콘텐츠 비율/"비어 보임" 표시)를 그립니다.
+        /// "비어 보임" 셀은 검출 단계에서 이미 자동 제외된 상태이며, 체크하면 다시 포함됩니다.
+        /// </summary>
+        private void DrawDetectedCell(SpriteSheetDetectedCell cell, int thumbIndex, int frameNo)
+        {
+            using (new EditorGUILayout.VerticalScope(GUILayout.Width(ThumbnailSize + 10f)))
+            {
+                Rect rect = GUILayoutUtility.GetRect(
+                    ThumbnailSize, ThumbnailSize, GUILayout.Width(ThumbnailSize), GUILayout.Height(ThumbnailSize));
+                EditorGUI.DrawRect(rect, new Color(0.22f, 0.22f, 0.22f, 1f)); // 투명 영역 확인용 배경
+                Texture2D thumb = thumbIndex < _thumbnails.Count ? _thumbnails[thumbIndex] : null;
+                if (thumb != null)
+                {
+                    GUI.DrawTexture(rect, thumb, ScaleMode.ScaleToFit, true);
+                }
+
+                cell.include = EditorGUILayout.ToggleLeft(
+                    cell.include ? $"{frameNo:00}" : "제외", cell.include, GUILayout.Width(ThumbnailSize + 8f));
+                EditorGUILayout.LabelField(
+                    // 비어 보이는 셀은 검출 시 자동 제외되므로 토글이 "제외"로 함께 표시된다.
+                    cell.looksEmpty ? "비어 보임" : $"{cell.contentRatio * 100f:0.#}%",
+                    EditorStyles.miniLabel, GUILayout.Width(ThumbnailSize + 8f));
+            }
+        }
+
+        /// <summary>배경 제거 + 격자 검출만 수행합니다. (프로젝트에는 아직 아무것도 기록하지 않습니다)</summary>
+        private void RunDetect()
         {
             try
             {
-                List<SpriteSheetRowDef> rows = BuildRowDefs();
+                ClearDetection();
                 bool whiteBackground = _backgroundIndex == 0;
+                _detection = SpriteSheetImporter.Detect(_importImagePath, whiteBackground, true);
 
-                SpriteSheetImportResult result = SpriteSheetImporter.Import(
-                    _importImagePath, rows, whiteBackground, true);
+                // 임포트 행 목록의 동작명을 위에서부터 순서대로 채운다. 남는 행은 비워 두고 사용자가 입력한다.
+                // "비어 보임" 자동 제외로 프레임이 하나도 남지 않은 행(여백 밴드 등)은 슬라이스되지 않으므로 건너뛴다.
+                int nameIndex = 0;
+                foreach (SpriteSheetDetectedRow row in _detection.rows)
+                {
+                    if (row.IncludedFrameCount == 0)
+                    {
+                        row.action = string.Empty;
+                        continue;
+                    }
+
+                    row.action = nameIndex < _importRows.Count
+                        ? ResolveAction(_importRows[nameIndex])
+                        : string.Empty;
+                    nameIndex++;
+                }
+
+                foreach (SpriteSheetDetectedRow row in _detection.rows)
+                {
+                    foreach (SpriteSheetDetectedCell cell in row.cells)
+                    {
+                        _thumbnails.Add(SpriteSheetImporter.CreateCellThumbnail(_detection, cell, (int)ThumbnailSize));
+                    }
+                }
+
+                var counts = new List<string>();
+                foreach (SpriteSheetDetectedRow row in _detection.rows)
+                {
+                    counts.Add(row.IncludedFrameCount.ToString());
+                }
+
+                int emptyCount = _detection.LooksEmptyFrameCount;
+                int includedRows = _detection.IncludedRowCount;
+
+                _importResultMessage = string.Empty;
+                _detectMessage =
+                    $"검출 완료: 행 {includedRows}개 / 프레임 총 {_detection.TotalFrameCount - emptyCount}개 " +
+                    $"(행별: {string.Join(", ", counts)}), 셀 {_detection.cellWidth}x{_detection.cellHeight}px\n" +
+                    (emptyCount > 0
+                        ? $"※ 비어 보이는 프레임 {emptyCount}개를 자동 제외했습니다. " +
+                          "실제 콘텐츠였다면 해당 셀을 다시 체크해주세요.\n"
+                        : string.Empty) +
+                    "행별 동작명을 확인한 뒤 [슬라이스 적용]을 눌러주세요. " +
+                    (includedRows > _importRows.Count
+                        ? "※ 검출된 행이 임포트 행 목록보다 많아 이름이 빈 행이 있습니다."
+                        : string.Empty);
+            }
+            catch (Exception e)
+            {
+                ClearDetection();
+                _detectMessage = string.Empty;
+                EditorUtility.DisplayDialog("격자 검출 실패", e.Message, "확인");
+            }
+        }
+
+        /// <summary>확정된 행 이름·포함 프레임으로 시트를 저장하고 슬라이스를 적용합니다.</summary>
+        private void RunApplySlices()
+        {
+            try
+            {
+                SpriteSheetImportResult result = SpriteSheetImporter.ApplySlices(_detection, false, true);
                 _importResultMessage =
                     $"임포트 완료: {result.assetPath}\n" +
                     $"행 {result.rowCount}개 / 프레임 총 {result.totalFrameCount}개 " +
-                    $"(행별: {string.Join(", ", result.framesPerRow)}), 셀 {result.cellWidth}x{result.cellHeight}px, " +
-                    "Sprite Mode=Multiple 동작명 기반 슬라이스 적용됨" +
-                    (result.usedDetectedLayout
-                        ? $"\n※ 검출된 격자 구성이 행 정의와 다릅니다 (행별 이름: {string.Join(", ", result.rowActions)})"
-                        : string.Empty);
+                    $"(행별: {string.Join(", ", result.framesPerRow)}), 셀 {result.cellWidth}x{result.cellHeight}px\n" +
+                    $"슬라이스 이름: {string.Join(", ", result.rowActions)} (Sprite Mode=Multiple)";
                 EditorGUIUtility.PingObject(
                     AssetDatabase.LoadAssetAtPath<Texture2D>(result.assetPath));
+
+                // 방금 슬라이스한 시트를 4번 애니메이션 섹션의 기본 대상으로 잡아 준다.
+                _clipSheet = AssetDatabase.LoadAssetAtPath<Texture2D>(result.assetPath);
+                ScanClipActions();
             }
             catch (Exception e)
             {
                 _importResultMessage = string.Empty;
-                EditorUtility.DisplayDialog("스프라이트 시트 임포트 실패", e.Message, "확인");
+                EditorUtility.DisplayDialog("슬라이스 적용 실패", e.Message, "확인");
             }
+        }
+
+        /// <summary>검출 결과와 안내 문구를 함께 지웁니다. ([검출 결과 지우기] 버튼)</summary>
+        private void ClearDetectionAndMessage()
+        {
+            ClearDetection();
+            _detectMessage = string.Empty;
+        }
+
+        /// <summary>검출 결과와 썸네일 텍스처를 해제합니다.</summary>
+        private void ClearDetection()
+        {
+            foreach (Texture2D thumb in _thumbnails)
+            {
+                if (thumb != null)
+                {
+                    DestroyImmediate(thumb);
+                }
+            }
+
+            _thumbnails.Clear();
+            _detection = null;
         }
     }
 }

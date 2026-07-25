@@ -49,6 +49,26 @@ namespace MCPTools.Editor
         public string targetField = string.Empty;
 
         /// <summary>
+        /// (선택, 이미지/UI 항목 전용) 적용할 서브 스프라이트 이름 (예: "walk_03").
+        /// 비어 있으면 에셋 전체를 Sprite로 로드하는 기존 동작을 사용하고,
+        /// 값이 있으면 스프라이트 시트 안에서 이름이 일치하는 스프라이트를 찾아 적용합니다.
+        /// </summary>
+        public string spriteName = string.Empty;
+
+        /// <summary>
+        /// (선택) 스프라이트를 가져올 시트 텍스처 경로 (Assets/ 기준 상대 경로).
+        /// 지정하면 확정본 자동 탐색 대신 이 경로를 적용 대상 에셋으로 사용합니다.
+        /// </summary>
+        public string spriteSheetPath = string.Empty;
+
+        /// <summary>
+        /// (선택, 프리팹 항목 전용) 대상 프리팹 루트의 Animator에 연결할 AnimatorController 경로
+        /// (Assets/ 기준 상대 경로). 지정하면 적용 시 프리팹 루트에 Animator를 붙이고(없을 때만) 이 컨트롤러를 연결합니다.
+        /// 씬 항목에는 지원하지 않습니다.
+        /// </summary>
+        public string animatorControllerPath = string.Empty;
+
+        /// <summary>
         /// 오디오 항목이 임의 컴포넌트의 AudioClip 필드를 대상으로 지정했는지 여부입니다
         /// (targetComponent와 targetField가 모두 지정된 경우).
         /// </summary>
@@ -100,6 +120,9 @@ namespace MCPTools.Editor
                 { "targetObjectPath", targetObjectPath },
                 { "targetComponent", targetComponent },
                 { "targetField", targetField },
+                { "spriteName", spriteName },
+                { "spriteSheetPath", spriteSheetPath },
+                { "animatorControllerPath", animatorControllerPath },
                 { "isUI", uiFlag == 1 },
                 { "isUISpecified", uiFlag >= 0 },
                 { "status", status }
@@ -127,6 +150,10 @@ namespace MCPTools.Editor
                 targetObjectPath = GetString(dict, "targetObjectPath"),
                 targetComponent = GetString(dict, "targetComponent"),
                 targetField = GetString(dict, "targetField"),
+                // 구 버전 JSON에는 없는 키다. 없으면 빈 문자열이 되어 기존 동작을 그대로 유지한다.
+                spriteName = GetString(dict, "spriteName"),
+                spriteSheetPath = GetString(dict, "spriteSheetPath"),
+                animatorControllerPath = GetString(dict, "animatorControllerPath"),
                 status = GetString(dict, "status", "pending")
             };
 

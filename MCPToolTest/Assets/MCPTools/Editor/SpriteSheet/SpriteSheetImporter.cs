@@ -41,6 +41,147 @@ namespace MCPTools.Editor
     }
 
     /// <summary>
+    /// 격자 검출로 찾은 프레임 셀 1개입니다. (콘텐츠가 있다고 판정된 셀만 만들어집니다)
+    /// 사용자가 <see cref="include"/>를 꺼서 슬라이스 대상에서 제외할 수 있습니다.
+    /// </summary>
+    public sealed class SpriteSheetDetectedCell
+    {
+        /// <summary>격자 열 인덱스 (0부터, 좌→우).</summary>
+        public int column;
+
+        /// <summary>셀 rect (하단-좌 원점 픽셀 좌표 — 슬라이스에 그대로 사용).</summary>
+        public Rect rect;
+
+        /// <summary>셀 면적 대비 전경(알파) 픽셀 비율입니다. 표시용이며 콘텐츠 판정에는 쓰이지 않습니다.</summary>
+        public float contentRatio;
+
+        /// <summary>
+        /// 전경 픽셀 비율이 낮아 "비어 보임"으로 판정된 셀이면 true입니다.
+        /// 이런 셀은 검출 시 <see cref="include"/>가 자동으로 false가 되어 프레임이 없는 것처럼 처리됩니다.
+        /// </summary>
+        public bool looksEmpty;
+
+        /// <summary>
+        /// 슬라이스에 포함할지 여부입니다. 기본 true지만 <see cref="looksEmpty"/>인 셀은 검출 시 자동으로 false가 됩니다.
+        /// 사용자가 값을 바꿔 자동 제외를 되돌리거나 추가로 제외할 수 있습니다.
+        /// </summary>
+        public bool include = true;
+    }
+
+    /// <summary>격자 검출로 찾은 행 1개입니다. (동작명은 사용자가 지정 — 자동 이름을 붙이지 않습니다)</summary>
+    public sealed class SpriteSheetDetectedRow
+    {
+        /// <summary>격자 행 인덱스 (0부터, 위→아래).</summary>
+        public int gridRow;
+
+        /// <summary>사용자가 지정한 동작명입니다. 비어 있으면 슬라이스를 적용할 수 없습니다.</summary>
+        public string action = string.Empty;
+
+        /// <summary>검출된 프레임 셀 목록 (좌→우).</summary>
+        public List<SpriteSheetDetectedCell> cells = new List<SpriteSheetDetectedCell>();
+
+        /// <summary>포함(체크)된 프레임 수입니다.</summary>
+        public int IncludedFrameCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (SpriteSheetDetectedCell cell in cells)
+                {
+                    if (cell.include)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+        }
+    }
+
+    /// <summary>
+    /// 배경 제거 + 격자 검출까지만 끝난 중간 결과입니다. 아직 파일 저장·슬라이스 적용은 하지 않은 상태로,
+    /// 행 동작명과 프레임 포함 여부를 확정한 뒤 <see cref="SpriteSheetImporter.ApplySlices"/>에 넘깁니다.
+    /// </summary>
+    public sealed class SpriteSheetDetection
+    {
+        /// <summary>원본 시트 이미지의 전체 경로 (저장 파일 이름의 기준).</summary>
+        public string sourcePath;
+
+        /// <summary>원본 이미지 너비(px).</summary>
+        public int imageWidth;
+
+        /// <summary>원본 이미지 높이(px).</summary>
+        public int imageHeight;
+
+        /// <summary>공통 셀 너비(px).</summary>
+        public int cellWidth;
+
+        /// <summary>공통 셀 높이(px).</summary>
+        public int cellHeight;
+
+        /// <summary>검출된 행 목록 (위→아래).</summary>
+        public List<SpriteSheetDetectedRow> rows = new List<SpriteSheetDetectedRow>();
+
+        /// <summary>검출된 전체 프레임 수입니다. (자동 제외된 "비어 보임" 셀 포함)</summary>
+        public int TotalFrameCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (SpriteSheetDetectedRow row in rows)
+                {
+                    count += row.cells.Count;
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>"비어 보임"으로 판정돼 자동 제외된 프레임 수입니다. (사용자가 다시 체크했는지와 무관)</summary>
+        public int LooksEmptyFrameCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (SpriteSheetDetectedRow row in rows)
+                {
+                    foreach (SpriteSheetDetectedCell cell in row.cells)
+                    {
+                        if (cell.looksEmpty)
+                        {
+                            count++;
+                        }
+                    }
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>포함(체크)된 프레임이 하나 이상 남은 행 수입니다. (자동 제외로 통째로 빠진 행 제외)</summary>
+        public int IncludedRowCount
+        {
+            get
+            {
+                int count = 0;
+                foreach (SpriteSheetDetectedRow row in rows)
+                {
+                    if (row.IncludedFrameCount > 0)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+        }
+
+        /// <summary>배경 제거·격자선 정리가 끝난 픽셀 버퍼입니다. (적용 단계에서 그대로 저장)</summary>
+        internal Color32[] Pixels;
+    }
+
+    /// <summary>
     /// 외부 AI가 생성한 멀티 행(동작별 Row) 스프라이트 시트 이미지를 격자선 기준으로 슬라이스하는 유틸리티입니다.
     /// 흰색 배경이면 외곽 시드 BFS(그라데이션 허용 오차 + 근사 흰색 + 무채색 조건)로 배경을 투명화한 뒤,
     /// 시트에 그려진 격자선(무채색·비순백·비암부 픽셀이 셀을 가로지르는 열/행)을 직접 검출해 균일 셀 경계를 만들고,
@@ -94,6 +235,14 @@ namespace MCPTools.Editor
         /// <summary>격자 셀에 콘텐츠(프레임)가 있다고 판정하는 최소 전경 픽셀 비율입니다. (셀 면적 대비)</summary>
         private const float GridCellContentRatio = 0.005f;
 
+        /// <summary>
+        /// 전경 픽셀 비율이 이 값 미만인 셀은 "비어 보임"으로 판정해 검출 결과 표에 표시하고
+        /// <see cref="SpriteSheetDetectedCell.include"/>를 자동으로 꺼 프레임이 없는 것처럼 처리합니다.
+        /// 셀 후보 판정(<see cref="GridCellContentRatio"/>) 자체에는 관여하지 않으므로 셀은 표에 남고,
+        /// 실제 콘텐츠였다면 사용자가 다시 체크해 되살릴 수 있습니다.
+        /// </summary>
+        private const float EmptyCellContentRatio = 0.02f;
+
         /// <summary>격자 셀 크기가 중앙값의 이 비율 미만이면 오검출/여백 sliver로 보고 이웃 셀과 합칩니다.</summary>
         private const float MinGridCellMedianRatio = 0.4f;
 
@@ -118,11 +267,14 @@ namespace MCPTools.Editor
         /// <summary>
         /// 멀티 행 시트 이미지를 격자선 기준으로 슬라이스해 <c>Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png</c>로 저장하고
         /// Sprite Multiple 슬라이스(행별 동작명 기반 <c>walk_01</c>~ 이름)를 적용합니다.
-        /// 격자선이 곧 정답이므로 행/프레임 수가 행 정의와 달라도 검출된 격자 그대로 임포트합니다
-        /// (행 이름은 순서대로 행 정의의 동작명, 초과 행은 <c>row5</c> 같은 자동 이름).
+        /// 격자선이 곧 정답이므로 검출된 격자 그대로 임포트하며, <b>자동 행 이름을 붙이지 않습니다</b>.
+        /// 전경 픽셀이 거의 없어 "비어 보임"으로 판정된 셀은 <b>자동으로 제외</b>되어 프레임이 없는 것처럼 처리되고,
+        /// 그 결과 프레임이 하나도 남지 않은 행은 통째로 빠지며 이름도 필요하지 않습니다.
+        /// 남은 행 수보다 행 정의가 부족하면 어느 행의 이름이 비었는지 알리며 실패합니다.
+        /// (검출 결과를 확인·편집한 뒤 적용하려면 <see cref="Detect"/> + <see cref="ApplySlices"/>를 사용하세요.)
         /// </summary>
         /// <param name="imagePath">시트 png 파일 경로 (프로젝트 밖 절대 경로 허용).</param>
-        /// <param name="rows">행 정의 목록 (위에서 아래 순서, 동작명 + 기대 프레임 수 — 이름·정보 표기용).</param>
+        /// <param name="rows">행 정의 목록 (위에서 아래 순서, 동작명 + 기대 프레임 수 — 프레임 수는 정보 표기용).</param>
         /// <param name="whiteBackground">true면 흰색 계열 배경(그라데이션·격자선 포함)을 외곽 BFS로 제거한 뒤 처리합니다.</param>
         /// <param name="showProgress">에디터 진행률 표시 여부 (MCP 호출 시 false 권장).</param>
         /// <param name="pivotAtFeet">
@@ -131,7 +283,8 @@ namespace MCPTools.Editor
         /// </param>
         /// <returns>임포트 결과.</returns>
         /// <exception cref="InvalidOperationException">
-        /// 파일 누락, 이미지 로드 실패, 격자 검출 실패 등 슬라이스 실패 시. 메시지에 원인과 조치를 포함합니다.
+        /// 파일 누락, 이미지 로드 실패, 격자 검출 실패, 행 이름 부족 등 슬라이스 실패 시.
+        /// 메시지에 원인과 조치를 포함합니다.
         /// </exception>
         public static SpriteSheetImportResult Import(
             string imagePath, List<SpriteSheetRowDef> rows, bool whiteBackground, bool showProgress = false,
@@ -150,6 +303,86 @@ namespace MCPTools.Editor
                 }
             }
 
+            SpriteSheetDetection detection = Detect(imagePath, whiteBackground, showProgress);
+
+            // "비어 보임"으로 자동 제외돼 프레임이 하나도 남지 않은 행(여백 밴드 등)은 슬라이스되지 않으므로
+            // 이름 배정 대상에서 뺀다. 남은 행에만 정의된 이름을 위에서부터 순서대로 배정한다.
+            var namedRows = new List<SpriteSheetDetectedRow>();
+            foreach (SpriteSheetDetectedRow row in detection.rows)
+            {
+                if (row.IncludedFrameCount > 0)
+                {
+                    namedRows.Add(row);
+                }
+            }
+
+            // 자동 이름(rowN)을 붙이지 않는다. 모자라면 실패한다.
+            for (int r = 0; r < namedRows.Count; r++)
+            {
+                namedRows[r].action = r < rows.Count ? rows[r].action : string.Empty;
+            }
+
+            if (namedRows.Count > rows.Count)
+            {
+                var detected = new List<string>();
+                foreach (SpriteSheetDetectedRow row in namedRows)
+                {
+                    detected.Add(row.IncludedFrameCount.ToString());
+                }
+
+                throw new InvalidOperationException(
+                    $"검출된 행은 {namedRows.Count}개인데 행 정의(rows)는 {rows.Count}개뿐입니다. " +
+                    $"이름이 없는 행: 행 {rows.Count + 1}~행 {namedRows.Count} (자동 이름 rowN을 붙이지 않습니다).\n" +
+                    $"행별 검출 프레임 수: {string.Join(", ", detected)}\n" +
+                    "조치: 위 검출 결과에 맞춰 rows에 행(동작명:프레임수)을 추가한 뒤 다시 실행해주세요.");
+            }
+
+            SpriteSheetImportResult result = ApplySlices(detection, pivotAtFeet, showProgress);
+
+            // 기대 구성(행 정의)과의 차이는 정보로만 기록한다.
+            var expected = new int[rows.Count];
+            for (int r = 0; r < rows.Count; r++)
+            {
+                expected[r] = rows[r].frameCount;
+            }
+
+            bool differs = result.rowCount != rows.Count;
+            if (!differs)
+            {
+                for (int r = 0; r < result.framesPerRow.Length; r++)
+                {
+                    if (result.framesPerRow[r] != expected[r])
+                    {
+                        differs = true;
+                        break;
+                    }
+                }
+            }
+
+            result.expectedRowCount = rows.Count;
+            result.expectedFramesPerRow = expected;
+            result.usedDetectedLayout = differs;
+            return result;
+        }
+
+        /// <summary>
+        /// 배경 제거 + 격자 검출까지만 수행하고 프레임 셀 후보를 돌려줍니다.
+        /// 파일 저장·슬라이스 적용은 하지 않으므로 프로젝트에 아무것도 기록하지 않습니다.
+        /// 반환된 결과의 행 동작명(<see cref="SpriteSheetDetectedRow.action"/>)과 프레임 포함 여부
+        /// (<see cref="SpriteSheetDetectedCell.include"/>)를 확정한 뒤 <see cref="ApplySlices"/>를 호출하세요.
+        /// 전경 픽셀이 거의 없어 "비어 보임"으로 판정된 셀은 <see cref="SpriteSheetDetectedCell.include"/>가
+        /// 이미 false로 내려간 상태로 돌아옵니다. (표에는 남으므로 실제 콘텐츠였다면 다시 체크해 되살릴 수 있습니다)
+        /// </summary>
+        /// <param name="imagePath">시트 png 파일 경로 (프로젝트 밖 절대 경로 허용).</param>
+        /// <param name="whiteBackground">true면 흰색 계열 배경(그라데이션·격자선 포함)을 외곽 BFS로 제거한 뒤 처리합니다.</param>
+        /// <param name="showProgress">에디터 진행률 표시 여부 (MCP 호출 시 false 권장).</param>
+        /// <returns>행·프레임 셀 검출 결과.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// 파일 누락, 이미지 로드 실패, 격자 검출 실패 시. 메시지에 원인과 조치를 포함합니다.
+        /// </exception>
+        public static SpriteSheetDetection Detect(
+            string imagePath, bool whiteBackground, bool showProgress = false)
+        {
             string fullPath = ResolveFullPath(imagePath);
             if (!File.Exists(fullPath))
             {
@@ -186,8 +419,7 @@ namespace MCPTools.Editor
                         EditorUtility.DisplayProgressBar("Sprite Sheet Import", "격자 경계 검출 중...", 0.4f);
                     }
 
-                    SpriteSheetImportResult result =
-                        ImportGrid(pixels, width, height, rows, fullPath, showProgress, pivotAtFeet);
+                    SpriteSheetDetection result = DetectGrid(pixels, width, height, fullPath);
                     if (result == null)
                     {
                         throw new InvalidOperationException(
@@ -213,16 +445,17 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
-        /// 격자 기준 슬라이스: AI가 그린 격자선을 직접 검출해 균일 셀 경계를 만들고,
-        /// 배경 제거된 원본 이미지를 재조립 없이 그 격자 위치 그대로 슬라이스합니다.
+        /// 격자 기준 셀 검출: AI가 그린 격자선을 직접 검출해 균일 셀 경계를 만들고,
+        /// 배경 제거된 원본 이미지의 격자 위치 그대로 프레임 셀 후보를 만듭니다.
         /// (격자선 = 무채색·비순백·비암부 픽셀이 교차 방향 <see cref="GridLineSpanRatio"/> 이상을 채우는 열/행)
-        /// 각 셀은 배경 제거 후 전경 픽셀 비율로 콘텐츠 유무를 판정해, 콘텐츠가 있는 셀만 슬라이스를 만듭니다.
+        /// 각 셀은 배경 제거 후 전경 픽셀 비율로 콘텐츠 유무를 판정해, 콘텐츠가 있는 셀만 프레임 후보가 됩니다.
+        /// 그중 비율이 <see cref="EmptyCellContentRatio"/> 미만인 셀은 "비어 보임"으로 보고 <c>include=false</c>로
+        /// 자동 제외해, 별도 조작 없이도 프레임이 없는 것처럼 처리됩니다.
         /// 셀 위치·크기를 원본 그대로 유지하므로 프레임 간 정렬이 보존됩니다.
         /// 격자 검출 실패(셀 행/열 2개 미만 등) 시 null을 반환합니다.
         /// </summary>
-        private static SpriteSheetImportResult ImportGrid(
-            Color32[] pixels, int width, int height, List<SpriteSheetRowDef> rows, string fullPath,
-            bool showProgress, bool pivotAtFeet)
+        private static SpriteSheetDetection DetectGrid(
+            Color32[] pixels, int width, int height, string fullPath)
         {
             // 격자선 직접 검출: 배경 제거는 알파만 바꾸므로(RGB 보존) 격자선 RGB는 그대로 남아 있음
             List<int> xBounds = DetectGridBoundaries(pixels, width, height, true);
@@ -276,136 +509,331 @@ namespace MCPTools.Editor
                 }
             }
 
-            // 콘텐츠가 하나라도 있는 그리드 행만 유지 (위→아래 순)
-            var keptRows = new List<int>();       // 그리드 행 인덱스(위→아래)
-            var contentCounts = new List<int>();  // 행별 콘텐츠 셀 수 (= 프레임 수)
+            // 콘텐츠가 하나라도 있는 그리드 행만 유지 (위→아래 순). 셀 rect은 격자 위치 그대로 사용한다.
+            var detection = new SpriteSheetDetection
+            {
+                sourcePath = fullPath,
+                imageWidth = width,
+                imageHeight = height,
+                cellWidth = cols > 0 ? xBounds[1] - xBounds[0] : 0,
+                cellHeight = gridRows > 0 ? yBounds[1] - yBounds[0] : 0,
+                Pixels = pixels
+            };
+
             for (int gr = 0; gr < gridRows; gr++)
             {
-                int count = 0;
-                for (int c = 0; c < cols; c++)
-                {
-                    if (hasContent[gr, c])
-                    {
-                        count++;
-                    }
-                }
-
-                if (count == 0)
-                {
-                    continue; // 완전 빈 그리드 행(여백 밴드 등)은 제외
-                }
-
-                keptRows.Add(gr);
-                contentCounts.Add(count);
-            }
-
-            if (keptRows.Count == 0)
-            {
-                return null;
-            }
-
-            // 격자선이 곧 정답: 검출된 격자 그대로 임포트. 기대 구성과의 차이는 정보로만 기록
-            int[] detectedCounts = contentCounts.ToArray();
-            bool differs = keptRows.Count != rows.Count;
-            if (!differs)
-            {
-                for (int r = 0; r < detectedCounts.Length; r++)
-                {
-                    if (detectedCounts[r] != rows[r].frameCount)
-                    {
-                        differs = true;
-                        break;
-                    }
-                }
-            }
-
-            // 행 이름: 순서대로 기존 동작명, 초과 행은 rowN
-            var actions = new string[keptRows.Count];
-            for (int r = 0; r < keptRows.Count; r++)
-            {
-                actions[r] = r < rows.Count ? rows[r].action : $"row{r + 1}";
-            }
-
-            if (showProgress)
-            {
-                EditorUtility.DisplayProgressBar("Sprite Sheet Import", "격자 셀 슬라이스 중...", 0.65f);
-            }
-
-            // 재조립 없이 배경 제거된 원본을 그대로 저장하고, 격자 셀 위치에 슬라이스 rect를 적용
-            var metas = new List<SpriteMetaData>();
-            int total = 0;
-            for (int r = 0; r < keptRows.Count; r++)
-            {
-                int gr = keptRows[r];
                 // yBounds는 GetPixels32와 동일한 하단 원점(y=0=하단) 좌표. gr은 위→아래 인덱스이므로
                 // 콘텐츠 판정과 동일하게 뒤에서부터 매핑한다.
                 int yLow = yBounds[gridRows - 1 - gr];  // 셀 하단(포함, 텍스처 y)
                 int yHighEx = yBounds[gridRows - gr];   // 셀 상단(배타)
                 int cellH = yHighEx - yLow;
-                string action = SpriteSheetPromptBuilder.SanitizeActionName(actions[r]);
-                int frameNo = 0;
 
+                var row = new SpriteSheetDetectedRow { gridRow = gr };
                 for (int c = 0; c < cols; c++)
                 {
                     if (!hasContent[gr, c])
                     {
-                        continue; // 빈 셀: 슬라이스 없음
+                        continue; // 빈 셀: 프레임 아님
                     }
 
                     int xMin = xBounds[c];
                     int cellW = xBounds[c + 1] - xMin;
-                    frameNo++;
-                    total++;
-
-                    // 피벗: 기본 셀 중앙. pivotAtFeet면 콘텐츠 수평 중앙 + 최하단(발밑)으로 이동해
-                    // 이동 애니메이션에서 발이 한 지점에 고정되게 한다.
-                    var pivot = new Vector2(0.5f, 0.5f);
-                    int alignment = (int)SpriteAlignment.Center;
-                    if (pivotAtFeet &&
-                        TryComputeFeetPivot(pixels, width, xMin, cellW, yLow, cellH, out Vector2 feet))
+                    float ratio = MeasureContentRatio(pixels, width, xMin, cellW, yLow, cellH);
+                    bool looksEmpty = ratio < EmptyCellContentRatio;
+                    row.cells.Add(new SpriteSheetDetectedCell
                     {
-                        pivot = feet;
-                        alignment = (int)SpriteAlignment.Custom;
-                    }
-
-                    metas.Add(new SpriteMetaData
-                    {
-                        name = $"{action}_{frameNo:00}",
+                        column = c,
                         // rect은 하단-좌 원점(픽셀). yLow가 곧 rect.y.
                         rect = new Rect(xMin, yLow, cellW, cellH),
-                        alignment = alignment,
-                        pivot = pivot
+                        contentRatio = ratio,
+                        looksEmpty = looksEmpty,
+                        // 비어 보이는 셀은 자동 제외 — 프레임이 없는 것처럼 처리한다 (사용자가 다시 체크하면 복구)
+                        include = !looksEmpty
                     });
+                }
+
+                if (row.cells.Count == 0)
+                {
+                    continue; // 완전 빈 그리드 행(여백 밴드 등)은 제외
+                }
+
+                detection.rows.Add(row);
+            }
+
+            return detection.rows.Count > 0 ? detection : null;
+        }
+
+        /// <summary>
+        /// 확정된 행 동작명·프레임 포함 여부로 시트를 <c>Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png</c>에
+        /// 저장하고 Sprite Multiple 슬라이스를 기록합니다. 프레임 번호는 <b>포함된 프레임만</b> 1부터 연속 부여합니다
+        /// (<c>{동작}_{프레임:00}</c>). 포함 프레임이 하나도 없는 행은 슬라이스에서 통째로 빠집니다.
+        /// ("비어 보임"으로 자동 제외된 셀도 여기서 그대로 빠집니다)
+        /// </summary>
+        /// <param name="detection"><see cref="Detect"/> 결과. 행 동작명과 프레임 포함 여부가 확정된 상태여야 합니다.</param>
+        /// <param name="pivotAtFeet">
+        /// true면 각 스프라이트의 피벗을 셀 중앙이 아니라 콘텐츠의 발밑(수평 중앙 + 최하단 전경 픽셀)에 둡니다.
+        /// </param>
+        /// <param name="showProgress">에디터 진행률 표시 여부 (MCP 호출 시 false 권장).</param>
+        /// <returns>임포트 결과. 기대 구성 필드(<c>expectedRowCount</c> 등)는 채우지 않습니다.</returns>
+        /// <exception cref="InvalidOperationException">
+        /// 검출 결과가 없거나, 이름이 빈 행·중복 이름이 있거나, 포함된 프레임이 하나도 없을 때.
+        /// 메시지에 원인과 조치를 포함합니다.
+        /// </exception>
+        public static SpriteSheetImportResult ApplySlices(
+            SpriteSheetDetection detection, bool pivotAtFeet = false, bool showProgress = false)
+        {
+            string problem = ValidateForApply(detection);
+            if (problem != null)
+            {
+                throw new InvalidOperationException(problem);
+            }
+
+            try
+            {
+                if (showProgress)
+                {
+                    EditorUtility.DisplayProgressBar("Sprite Sheet Import", "격자 셀 슬라이스 중...", 0.65f);
+                }
+
+                Color32[] pixels = detection.Pixels;
+                var metas = new List<SpriteMetaData>();
+                var actions = new List<string>();
+                var counts = new List<int>();
+                int total = 0;
+
+                foreach (SpriteSheetDetectedRow row in detection.rows)
+                {
+                    if (row.IncludedFrameCount == 0)
+                    {
+                        continue; // 전부 제외된 행은 슬라이스하지 않음
+                    }
+
+                    string action = SpriteSheetPromptBuilder.SanitizeActionName(row.action);
+                    int frameNo = 0;
+                    foreach (SpriteSheetDetectedCell cell in row.cells)
+                    {
+                        if (!cell.include)
+                        {
+                            continue; // 사용자가 제외한 프레임: 슬라이스 없음 (번호도 건너뛰지 않고 당겨짐)
+                        }
+
+                        int xMin = (int)cell.rect.x;
+                        int cellW = (int)cell.rect.width;
+                        int yLow = (int)cell.rect.y;
+                        int cellH = (int)cell.rect.height;
+                        frameNo++;
+                        total++;
+
+                        // 피벗: 기본 셀 중앙. pivotAtFeet면 콘텐츠 수평 중앙 + 최하단(발밑)으로 이동해
+                        // 이동 애니메이션에서 발이 한 지점에 고정되게 한다.
+                        var pivot = new Vector2(0.5f, 0.5f);
+                        int alignment = (int)SpriteAlignment.Center;
+                        if (pivotAtFeet &&
+                            TryComputeFeetPivot(
+                                pixels, detection.imageWidth, xMin, cellW, yLow, cellH, out Vector2 feet))
+                        {
+                            pivot = feet;
+                            alignment = (int)SpriteAlignment.Custom;
+                        }
+
+                        metas.Add(new SpriteMetaData
+                        {
+                            name = $"{action}_{frameNo:00}",
+                            rect = cell.rect,
+                            alignment = alignment,
+                            pivot = pivot
+                        });
+                    }
+
+                    actions.Add(action);
+                    counts.Add(frameNo);
+                }
+
+                if (showProgress)
+                {
+                    EditorUtility.DisplayProgressBar("Sprite Sheet Import", "저장 및 임포트 중...", 0.85f);
+                }
+
+                // 재조립 없이 배경 제거된 원본을 그대로 저장하고, 격자 셀 위치에 슬라이스 rect를 적용
+                string assetPath = SaveSheet(
+                    pixels, detection.imageWidth, detection.imageHeight,
+                    Path.GetFileNameWithoutExtension(detection.sourcePath));
+                ApplySpriteSlices(assetPath, metas);
+
+                return new SpriteSheetImportResult
+                {
+                    assetPath = assetPath,
+                    rowCount = actions.Count,
+                    totalFrameCount = total,
+                    framesPerRow = counts.ToArray(),
+                    rowActions = actions.ToArray(),
+                    expectedRowCount = 0,
+                    expectedFramesPerRow = new int[0],
+                    usedDetectedLayout = false,
+                    cellWidth = detection.cellWidth,
+                    cellHeight = detection.cellHeight
+                };
+            }
+            finally
+            {
+                if (showProgress)
+                {
+                    EditorUtility.ClearProgressBar();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 검출 결과에 슬라이스를 적용할 수 있는지 검사합니다. 적용 가능하면 null,
+        /// 아니면 원인·조치를 담은 사용자 안내 메시지를 반환합니다.
+        /// (자동 이름을 붙이지 않으므로 이름이 빈 행이 있으면 적용을 막습니다)
+        /// </summary>
+        /// <param name="detection">검사할 검출 결과.</param>
+        /// <returns>문제 없으면 null, 있으면 안내 메시지.</returns>
+        public static string ValidateForApply(SpriteSheetDetection detection)
+        {
+            if (detection == null || detection.rows == null || detection.rows.Count == 0)
+            {
+                return "검출 결과가 없습니다.\n조치: 먼저 [배경 제거 + 격자 검출]을 실행해주세요.";
+            }
+
+            if (detection.Pixels == null)
+            {
+                return "검출 결과의 이미지 데이터가 남아 있지 않습니다.\n조치: [배경 제거 + 격자 검출]을 다시 실행해주세요.";
+            }
+
+            var missing = new List<string>();
+            var used = new Dictionary<string, int>();
+            var duplicated = new List<string>();
+            int appliedRows = 0;
+
+            for (int r = 0; r < detection.rows.Count; r++)
+            {
+                SpriteSheetDetectedRow row = detection.rows[r];
+                if (row.IncludedFrameCount == 0)
+                {
+                    continue; // 전부 제외한 행은 이름이 없어도 됨 (행 자체를 빼는 방법)
+                }
+
+                appliedRows++;
+                if (string.IsNullOrWhiteSpace(row.action))
+                {
+                    missing.Add($"행 {r + 1}");
+                    continue;
+                }
+
+                string key = SpriteSheetPromptBuilder.SanitizeActionName(row.action);
+                if (used.TryGetValue(key, out int firstRow))
+                {
+                    duplicated.Add($"행 {firstRow + 1}·행 {r + 1} = \"{key}\"");
+                }
+                else
+                {
+                    used[key] = r;
                 }
             }
 
-            if (showProgress)
+            if (appliedRows == 0)
             {
-                EditorUtility.DisplayProgressBar("Sprite Sheet Import", "저장 및 임포트 중...", 0.85f);
+                return "포함(체크)된 프레임이 하나도 없습니다.\n조치: 슬라이스할 프레임을 최소 1개 이상 체크해주세요.";
             }
 
-            string assetPath = SaveSheet(pixels, width, height, Path.GetFileNameWithoutExtension(fullPath));
-            ApplySpriteSlices(assetPath, metas);
-
-            var expected = new int[rows.Count];
-            for (int r = 0; r < rows.Count; r++)
+            if (missing.Count > 0)
             {
-                expected[r] = rows[r].frameCount;
+                return $"동작명이 비어 있는 행이 있습니다: {string.Join(", ", missing)}\n" +
+                       "조치: 해당 행의 동작명을 입력하거나, 그 행의 프레임을 모두 제외해 행 자체를 빼주세요. " +
+                       "(자동 이름 rowN을 붙이지 않습니다)";
             }
 
-            return new SpriteSheetImportResult
+            if (duplicated.Count > 0)
             {
-                assetPath = assetPath,
-                rowCount = keptRows.Count,
-                totalFrameCount = total,
-                framesPerRow = detectedCounts,
-                rowActions = actions,
-                expectedRowCount = rows.Count,
-                expectedFramesPerRow = expected,
-                usedDetectedLayout = differs,
-                cellWidth = cols > 0 ? xBounds[1] - xBounds[0] : 0,
-                cellHeight = gridRows > 0 ? yBounds[1] - yBounds[0] : 0
+                return $"동작명이 중복된 행이 있습니다: {string.Join(", ", duplicated)}\n" +
+                       "조치: 프레임 이름이 겹치지 않게 행마다 다른 동작명을 입력해주세요.";
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 셀 안 전경(알파 &gt; <see cref="AlphaThreshold"/>) 픽셀이 셀 면적에서 차지하는 비율을 구합니다.
+        /// 표시와 "비어 보임" 자동 제외(<see cref="EmptyCellContentRatio"/>)에 쓰이며,
+        /// 셀 후보 판정(<see cref="GridCellContentRatio"/>)에는 관여하지 않습니다.
+        /// </summary>
+        private static float MeasureContentRatio(
+            Color32[] pixels, int width, int xMin, int cellW, int yLow, int cellH)
+        {
+            int area = cellW * cellH;
+            if (area <= 0)
+            {
+                return 0f;
+            }
+
+            int count = 0;
+            for (int y = yLow; y < yLow + cellH; y++)
+            {
+                int row = y * width;
+                for (int x = xMin; x < xMin + cellW; x++)
+                {
+                    if (pixels[row + x].a > AlphaThreshold)
+                    {
+                        count++;
+                    }
+                }
+            }
+
+            return count / (float)area;
+        }
+
+        /// <summary>
+        /// 검출된 셀의 미리보기 텍스처를 만듭니다. (검출 결과 표의 썸네일용 — 호출자가 <c>DestroyImmediate</c>로 해제)
+        /// 최근접 샘플링으로 축소하며, 검출 결과의 픽셀 버퍼가 없으면 null을 반환합니다.
+        /// </summary>
+        /// <param name="detection">검출 결과.</param>
+        /// <param name="cell">썸네일을 만들 셀.</param>
+        /// <param name="maxSize">긴 변 기준 최대 픽셀 크기.</param>
+        /// <returns>미리보기 텍스처. 만들 수 없으면 null.</returns>
+        public static Texture2D CreateCellThumbnail(
+            SpriteSheetDetection detection, SpriteSheetDetectedCell cell, int maxSize)
+        {
+            if (detection == null || detection.Pixels == null || cell == null || maxSize < 1)
+            {
+                return null;
+            }
+
+            int srcW = (int)cell.rect.width;
+            int srcH = (int)cell.rect.height;
+            int srcX = (int)cell.rect.x;
+            int srcY = (int)cell.rect.y;
+            if (srcW < 1 || srcH < 1)
+            {
+                return null;
+            }
+
+            float scale = Mathf.Min(1f, maxSize / (float)Mathf.Max(srcW, srcH));
+            int dstW = Mathf.Max(1, Mathf.RoundToInt(srcW * scale));
+            int dstH = Mathf.Max(1, Mathf.RoundToInt(srcH * scale));
+
+            var buffer = new Color32[dstW * dstH];
+            for (int y = 0; y < dstH; y++)
+            {
+                int sy = Mathf.Min(srcH - 1, y * srcH / dstH) + srcY;
+                int srcRow = sy * detection.imageWidth;
+                int dstRow = y * dstW;
+                for (int x = 0; x < dstW; x++)
+                {
+                    int sx = Mathf.Min(srcW - 1, x * srcW / dstW) + srcX;
+                    buffer[dstRow + x] = detection.Pixels[srcRow + sx];
+                }
+            }
+
+            var texture = new Texture2D(dstW, dstH, TextureFormat.RGBA32, false)
+            {
+                hideFlags = HideFlags.HideAndDontSave,
+                filterMode = FilterMode.Bilinear
             };
+            texture.SetPixels32(buffer);
+            texture.Apply();
+            return texture;
         }
 
         /// <summary>

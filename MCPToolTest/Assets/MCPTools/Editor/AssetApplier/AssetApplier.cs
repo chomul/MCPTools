@@ -28,6 +28,9 @@ namespace MCPTools.Editor
         /// <summary>실제로 적용된 에셋 경로 (Assets/ 기준 상대 경로).</summary>
         public string appliedAssetPath = string.Empty;
 
+        /// <summary>프리팹 루트 Animator에 연결한 AnimatorController 경로. 연결하지 않았으면 빈 문자열.</summary>
+        public string linkedControllerPath = string.Empty;
+
         /// <summary>결과 메시지 (실패 시 사유).</summary>
         public string message = string.Empty;
     }
@@ -47,9 +50,13 @@ namespace MCPTools.Editor
     /// </summary>
     public static class AssetApplier
     {
+        /// <summary>실패 사유에 나열할 서브 스프라이트 이름의 최대 개수입니다.</summary>
+        private const int MaxListedSpriteNames = 10;
+
         /// <summary>
         /// 항목의 확정본 에셋 경로를 자동 탐색합니다.
-        /// GenerationResults.json의 outputPath 기록을 우선 사용하고,
+        /// 항목에 <see cref="AssetListItem.spriteSheetPath"/>가 지정되어 있으면 자동 탐색 대신 그 경로를 사용합니다.
+        /// 그 외에는 GenerationResults.json의 outputPath 기록을 우선 사용하고,
         /// 없으면 규칙 경로(Assets/Generated/3_Confirmed/Images/{id}.png, Audio/{id}.*, 구 위치도 함께 탐색)를 탐색합니다.
         /// </summary>
         /// <param name="settings">설정 객체.</param>
@@ -57,7 +64,19 @@ namespace MCPTools.Editor
         /// <returns>확정본 경로 (Assets/ 기준 상대 경로). 찾지 못하면 null.</returns>
         public static string FindConfirmedAssetPath(MCPToolSettings settings, AssetListItem item)
         {
-            if (settings == null || item == null || string.IsNullOrEmpty(item.id))
+            if (settings == null || item == null)
+            {
+                return null;
+            }
+
+            // 스프라이트 시트를 직접 지정한 항목: 시트는 항목별 확정본이 아니므로 자동 탐색 대상이 아니다.
+            // (파일이 없으면 여기서 걸러내지 않고 ValidateItem이 "에셋 파일 없음"으로 안내한다.)
+            if (!string.IsNullOrEmpty(item.spriteSheetPath))
+            {
+                return item.spriteSheetPath.Replace('\\', '/');
+            }
+
+            if (string.IsNullOrEmpty(item.id))
             {
                 return null;
             }
@@ -291,20 +310,135 @@ namespace MCPTools.Editor
                         reasons.Add($"에셋이 Texture2D로 임포트되지 않았습니다: \"{assetPath}\"");
                     }
 
+                    // RawImage는 Texture를 받으므로 서브 스프라이트를 지정해도 반영되지 않는다.
+                    // 말없이 시트 전체가 적용되면 원인을 찾기 어려우므로 여기서 걸러 안내한다.
+                    if (!string.IsNullOrEmpty(item.spriteName))
+                    {
+                        reasons.Add(
+                            $"대상이 RawImage여서 스프라이트 이름(\"{item.spriteName}\")을 적용할 수 없습니다. " +
+                            "특정 프레임을 쓰려면 대상을 Image로 바꾸거나, 시트 전체를 쓰려면 스프라이트 이름을 비워주세요.");
+                    }
+
                     break;
 
                 default: // Image / SpriteRenderer → Sprite 필요
-                    if (AssetDatabase.LoadAssetAtPath<Sprite>(assetPath) == null)
+                    if (FindItemSprite(assetPath, item) == null)
                     {
-                        reasons.Add(
-                            $"에셋이 Sprite로 임포트되지 않았습니다: \"{assetPath}\". " +
-                            "Texture Type을 Sprite (2D and UI)로 변경해주세요.");
+                        // 이름을 지정한 항목은 그 이름이 없는 것이고, 아니면 Sprite 임포트 자체가 안 된 것이다.
+                        reasons.Add(!string.IsNullOrEmpty(item.spriteName)
+                            ? $"에셋 \"{assetPath}\"에서 스프라이트 \"{item.spriteName}\"을(를) 찾을 수 없습니다. " +
+                              DescribeAvailableSprites(assetPath)
+                            : $"에셋이 Sprite로 임포트되지 않았습니다: \"{assetPath}\". " +
+                              "Texture Type을 Sprite (2D and UI)로 변경해주세요.");
                     }
 
                     break;
             }
 
+            // 연결할 컨트롤러가 있는 항목(직접 지정 또는 시트 기준 자동)만 추가 검증한다.
+            if (!string.IsNullOrEmpty(item.animatorControllerPath) && item.IsSceneItem)
+            {
+                reasons.Add(
+                    "씬에 직접 배치된 오브젝트에는 AnimatorController를 자동 연결하지 않습니다. " +
+                    "조치: 프리팹 대상 항목에서 지정하거나, 씬에서 직접 Animator에 컨트롤러를 연결해주세요.");
+            }
+            else
+            {
+                string controllerPath = ResolveAnimatorControllerPath(item);
+                if (!string.IsNullOrEmpty(controllerPath))
+                {
+                    ValidateAnimatorController(item, controllerPath, reasons);
+                }
+            }
+
             return reasons;
+        }
+
+        /// <summary>
+        /// 항목에 연결할 AnimatorController 경로를 정합니다.
+        /// <see cref="AssetListItem.animatorControllerPath"/>가 있으면 그 값을 쓰고,
+        /// 없고 스프라이트 시트를 지정했다면 그 시트에서 만든 컨트롤러
+        /// (<c>{확정본}/Animations/{시트이름}/{시트이름}.controller</c>)를 <b>자동으로</b> 씁니다.
+        /// 한 시트의 클립·컨트롤러는 한 벌뿐이므로, 시트를 고르면 애니메이션까지 함께 적용됩니다.
+        /// </summary>
+        /// <param name="item">대상 항목.</param>
+        /// <returns>연결할 컨트롤러 경로. 없으면 빈 문자열.</returns>
+        public static string ResolveAnimatorControllerPath(AssetListItem item)
+        {
+            if (item == null || item.IsSceneItem)
+            {
+                return string.Empty;
+            }
+
+            if (!string.IsNullOrEmpty(item.animatorControllerPath))
+            {
+                return item.animatorControllerPath.Replace('\\', '/');
+            }
+
+            if (string.IsNullOrEmpty(item.spriteSheetPath))
+            {
+                return string.Empty;
+            }
+
+            // 시트에서 만든 컨트롤러가 실제로 있을 때만 자동 연결한다 (없으면 스프라이트만 적용).
+            string auto = SpriteSheetClipBuilder.ControllerPathForSheet(item.spriteSheetPath);
+            return AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(auto) != null ? auto : string.Empty;
+        }
+
+        /// <summary>
+        /// 항목에 지정한 AnimatorController 연결 대상을 검증합니다.
+        /// 컨트롤러 에셋 존재 여부와, 컨트롤러가 참조하는 클립의 커브 경로가 프리팹 계층에 실제로 있는지 확인합니다
+        /// (커브 경로는 Animator가 붙는 프리팹 루트 기준이라, 경로가 어긋나면 재생해도 아무 일이 일어나지 않습니다).
+        /// </summary>
+        private static void ValidateAnimatorController(
+            AssetListItem item, string controllerPath, List<string> reasons)
+        {
+            var controller = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(controllerPath);
+            if (controller == null)
+            {
+                reasons.Add(
+                    $"AnimatorController를 찾을 수 없습니다: \"{controllerPath}\". " +
+                    "조치: 스프라이트 시트 창의 [클립 + Animator 생성]으로 컨트롤러를 먼저 만들거나 경로를 확인해주세요.");
+                return;
+            }
+
+            var prefab = AssetDatabase.LoadAssetAtPath<GameObject>(item.targetPrefabPath);
+            if (prefab == null)
+            {
+                return; // 프리팹 자체 문제는 위에서 이미 사유로 남았다.
+            }
+
+            var missing = new List<string>();
+            foreach (AnimationClip clip in controller.animationClips)
+            {
+                if (clip == null)
+                {
+                    continue;
+                }
+
+                foreach (EditorCurveBinding binding in AnimationUtility.GetObjectReferenceCurveBindings(clip))
+                {
+                    string bindingPath = binding.path ?? string.Empty;
+                    if (FindTargetTransform(prefab, bindingPath) == null && !missing.Contains(bindingPath))
+                    {
+                        missing.Add(bindingPath);
+                    }
+                }
+            }
+
+            if (missing.Count > 0)
+            {
+                var shown = new List<string>();
+                foreach (string path in missing)
+                {
+                    shown.Add(string.IsNullOrEmpty(path) ? "(루트)" : path);
+                }
+
+                reasons.Add(
+                    $"컨트롤러 \"{controllerPath}\"의 클립이 참조하는 오브젝트 경로가 프리팹 \"{item.targetPrefabPath}\"에 없습니다: " +
+                    $"{string.Join(", ", shown)}. 그대로 연결하면 애니메이션이 재생돼도 스프라이트가 바뀌지 않습니다.\n" +
+                    "조치: 스프라이트 시트 창에서 이 프리팹의 대상 오브젝트를 지정해 클립을 다시 만들어주세요.");
+            }
         }
 
         /// <summary>
@@ -323,6 +457,8 @@ namespace MCPTools.Editor
 
         /// <summary>
         /// 확정본을 대상 프리팹 에셋에 적용합니다. 검증 실패 시 적용하지 않고 사유를 반환합니다.
+        /// 항목에 <see cref="AssetListItem.animatorControllerPath"/>가 있으면 프리팹 루트 Animator 연결까지
+        /// 같은 저장에 함께 수행합니다.
         /// Undo.RecordObject 등록 후 값을 변경하므로 에디터에서 Ctrl+Z로 되돌릴 수 있습니다.
         /// </summary>
         /// <param name="item">대상 항목.</param>
@@ -358,11 +494,16 @@ namespace MCPTools.Editor
             try
             {
                 AssignAsset(component, assetPath, item);
+
+                // 컨트롤러 연결은 같은 프리팹 수정이므로 저장 전에 함께 처리해 한 번만 저장한다.
+                string linked = LinkAnimatorController(item, prefab);
                 PrefabUtility.SavePrefabAsset(prefab);
 
+                result.linkedControllerPath = linked ?? string.Empty;
                 result.success = true;
                 result.message =
-                    $"적용 완료: {item.targetPrefabPath} → {component.GetType().Name} ({result.appliedAssetPath})";
+                    $"적용 완료: {item.targetPrefabPath} → {component.GetType().Name} ({result.appliedAssetPath})" +
+                    (linked != null ? $" + Animator 연결 ({linked})" : string.Empty);
             }
             catch (Exception e)
             {
@@ -370,6 +511,48 @@ namespace MCPTools.Editor
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// 항목에 연결할 컨트롤러가 있으면(<see cref="ResolveAnimatorControllerPath"/> — 직접 지정 또는 시트 기준 자동)
+        /// 프리팹 루트에 Animator를 붙이고(이미 있으면 그대로 재사용) 컨트롤러를 연결합니다.
+        /// <c>Undo</c>에 등록하며, 프리팹 저장은 호출자가 <c>PrefabUtility.SavePrefabAsset</c>으로 한 번에 수행합니다.
+        /// (커브 경로 유효성은 <see cref="ValidateItem"/>에서 미리 검사합니다)
+        /// </summary>
+        /// <returns>연결한 컨트롤러 경로. 연결할 컨트롤러가 없으면 null.</returns>
+        /// <exception cref="InvalidOperationException">컨트롤러를 로드할 수 없거나 Animator를 추가하지 못한 경우.</exception>
+        private static string LinkAnimatorController(AssetListItem item, GameObject prefab)
+        {
+            string controllerPath = ResolveAnimatorControllerPath(item);
+            if (prefab == null || string.IsNullOrEmpty(controllerPath))
+            {
+                return null;
+            }
+
+            var controller = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(controllerPath);
+            if (controller == null)
+            {
+                throw new InvalidOperationException(
+                    $"AnimatorController를 로드할 수 없습니다: \"{controllerPath}\". 경로를 확인해주세요.");
+            }
+
+            var animator = prefab.GetComponent<Animator>();
+            if (animator == null)
+            {
+                animator = Undo.AddComponent<Animator>(prefab);
+            }
+
+            if (animator == null)
+            {
+                throw new InvalidOperationException(
+                    $"프리팹 \"{item.targetPrefabPath}\"에 Animator를 추가하지 못했습니다. " +
+                    "프리팹이 읽기 전용(패키지 안 등)인지 확인해주세요.");
+            }
+
+            Undo.RecordObject(animator, $"MCPTools 애니메이터 컨트롤러 연결 ({item.id})");
+            animator.runtimeAnimatorController = controller;
+            EditorUtility.SetDirty(animator);
+            return controllerPath;
         }
 
         /// <summary>
@@ -648,8 +831,139 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
+        /// 텍스처 에셋에 포함된 서브 스프라이트 이름 목록을 반환합니다
+        /// (Sprite Mode가 Multiple인 스프라이트 시트의 프레임 이름들. Single이면 스프라이트 1개).
+        /// </summary>
+        /// <param name="assetPath">텍스처 에셋 경로 (Assets/ 기준 상대 경로).</param>
+        /// <returns>스프라이트 이름 목록 (없으면 빈 목록).</returns>
+        public static List<string> GetSpriteNames(string assetPath)
+        {
+            var names = new List<string>();
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return names;
+            }
+
+            foreach (UnityEngine.Object representation in AssetDatabase.LoadAllAssetRepresentationsAtPath(assetPath))
+            {
+                if (representation is Sprite sprite)
+                {
+                    names.Add(sprite.name);
+                }
+            }
+
+            return names;
+        }
+
+        /// <summary>
+        /// 텍스처 에셋 안에서 이름이 일치하는 서브 스프라이트를 찾습니다.
+        /// </summary>
+        /// <param name="assetPath">텍스처(시트) 에셋 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="spriteName">찾을 스프라이트 이름 (예: "walk_03").</param>
+        /// <returns>일치하는 Sprite. 없으면 null.</returns>
+        public static Sprite FindSubSprite(string assetPath, string spriteName)
+        {
+            if (string.IsNullOrEmpty(assetPath) || string.IsNullOrEmpty(spriteName))
+            {
+                return null;
+            }
+
+            foreach (UnityEngine.Object representation in AssetDatabase.LoadAllAssetRepresentationsAtPath(assetPath))
+            {
+                if (representation is Sprite sprite && sprite.name == spriteName)
+                {
+                    return sprite;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 실패 사유에 덧붙일 "사용 가능한 스프라이트 이름" 안내 문구를 만듭니다
+        /// (앞에서부터 최대 <see cref="MaxListedSpriteNames"/>개 + 나머지 개수).
+        /// </summary>
+        private static string DescribeAvailableSprites(string assetPath)
+        {
+            List<string> names = GetSpriteNames(assetPath);
+            if (names.Count == 0)
+            {
+                return "이 에셋에는 서브 스프라이트가 없습니다. " +
+                       "Texture Type을 Sprite (2D and UI), Sprite Mode를 Multiple로 두고 슬라이스했는지 확인해주세요.";
+            }
+
+            int shown = Mathf.Min(names.Count, MaxListedSpriteNames);
+            string listed = string.Join(", ", names.GetRange(0, shown));
+            return names.Count > shown
+                ? $"사용 가능한 이름({names.Count}개): {listed} 외 {names.Count - shown}개"
+                : $"사용 가능한 이름({names.Count}개): {listed}";
+        }
+
+        /// <summary>
+        /// 항목에 적용할 Sprite를 찾습니다 (검증·미리보기·적용 공용, 실패해도 예외를 던지지 않습니다).
+        /// <list type="number">
+        /// <item><see cref="AssetListItem.spriteName"/>이 있으면 그 이름의 서브 스프라이트</item>
+        /// <item>없으면 에셋 전체를 Sprite로 로드 (단일 스프라이트 이미지)</item>
+        /// <item>그것도 없으면(Sprite Mode=Multiple 시트) <b>첫 번째 서브 스프라이트</b></item>
+        /// </list>
+        /// 3번 덕분에 스프라이트 시트를 프레임 이름 없이 지정해도 첫 프레임이 적용됩니다
+        /// (Animator를 연결하면 재생 시 프레임이 덮어써지므로 초기 표시용으로 충분합니다).
+        /// </summary>
+        /// <param name="assetPath">적용할 에셋 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="item">대상 항목. null이면 에셋 전체 → 첫 서브 스프라이트 순으로 찾습니다.</param>
+        /// <returns>적용할 Sprite. 찾지 못하면 null.</returns>
+        public static Sprite FindItemSprite(string assetPath, AssetListItem item)
+        {
+            if (string.IsNullOrEmpty(assetPath))
+            {
+                return null;
+            }
+
+            if (item != null && !string.IsNullOrEmpty(item.spriteName))
+            {
+                return FindSubSprite(assetPath, item.spriteName);
+            }
+
+            Sprite whole = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+            if (whole != null)
+            {
+                return whole;
+            }
+
+            foreach (UnityEngine.Object representation in AssetDatabase.LoadAllAssetRepresentationsAtPath(assetPath))
+            {
+                if (representation is Sprite sprite)
+                {
+                    return sprite;
+                }
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// 항목에 맞는 Sprite를 로드합니다 (<see cref="FindItemSprite"/> 규칙).
+        /// 찾지 못하면 원인·사용 가능한 이름을 담아 예외를 던집니다.
+        /// </summary>
+        private static Sprite ResolveSprite(string assetPath, AssetListItem item)
+        {
+            Sprite sprite = FindItemSprite(assetPath, item);
+            if (sprite == null)
+            {
+                string what = item != null && !string.IsNullOrEmpty(item.spriteName)
+                    ? $"스프라이트 \"{item.spriteName}\"을(를)"
+                    : "적용할 스프라이트를";
+                throw new InvalidOperationException(
+                    $"에셋 \"{assetPath}\"에서 {what} 찾을 수 없습니다. " + DescribeAvailableSprites(assetPath));
+            }
+
+            return sprite;
+        }
+
+        /// <summary>
         /// 컴포넌트 종류에 맞게 에셋을 할당합니다 (Undo.RecordObject 등록 포함, 프리팹/씬 공용).
         /// 오디오 임의 필드 대상(targetComponent+targetField)은 해당 직렬화 필드에 AudioClip을 할당합니다.
+        /// 항목에 spriteName이 지정된 경우 Image/SpriteRenderer에는 시트 안의 해당 서브 스프라이트를 할당합니다.
         /// </summary>
         private static void AssignAsset(Component component, string assetPath, AssetListItem item)
         {
@@ -669,7 +983,7 @@ namespace MCPTools.Editor
                     break;
 
                 case "SpriteRenderer":
-                    ((SpriteRenderer)component).sprite = AssetDatabase.LoadAssetAtPath<Sprite>(assetPath);
+                    ((SpriteRenderer)component).sprite = ResolveSprite(assetPath, item);
                     break;
 
                 case "RawImage":
@@ -678,7 +992,7 @@ namespace MCPTools.Editor
                     break;
 
                 default: // Image
-                    SetObjectProperty(component, "m_Sprite", AssetDatabase.LoadAssetAtPath<Sprite>(assetPath));
+                    SetObjectProperty(component, "m_Sprite", ResolveSprite(assetPath, item));
                     break;
             }
 

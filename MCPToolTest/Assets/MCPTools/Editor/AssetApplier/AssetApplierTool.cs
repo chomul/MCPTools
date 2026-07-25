@@ -23,9 +23,16 @@ namespace MCPTools.Editor
                 "컴포넌트(Image.sprite/RawImage.texture/SpriteRenderer.sprite/AudioSource.clip)에 적용합니다. " +
                 "오디오 항목에 targetComponent(컴포넌트 타입 이름)+targetField(직렬화 필드 경로)가 지정되어 있으면 " +
                 "AudioSource 대신 해당 컴포넌트의 직렬화된 AudioClip 필드에 적용합니다. " +
+                "항목에 animatorControllerPath가 있으면(또는 파라미터로 넘기면) 프리팹 루트에 Animator를 붙이고 " +
+                "그 컨트롤러를 함께 연결합니다(씬 항목은 미지원). " +
                 "파라미터: assetListPath(필수, Assets/ 상대 AssetList JSON), assetItemId(필수), " +
-                "assetPath(선택, 생략 시 확정본 자동 탐색). " +
-                "반환 data: { prefabPath, scenePath, objectPath, appliedAssetPath }.",
+                "assetPath(선택, 생략 시 확정본 자동 탐색 — 항목에 spriteSheetPath가 있으면 그 시트를 사용), " +
+                "spriteName(선택, 스프라이트 시트 안의 서브 스프라이트 이름 예: \"walk_03\". " +
+                "지정하면 항목의 spriteName을 덮어써 해당 프레임을 Image/SpriteRenderer에 적용합니다. " +
+                "생략하면 항목에 저장된 값을 사용하고, 그 값도 비어 있으면 에셋 전체를 스프라이트로, " +
+                "시트처럼 전체 스프라이트가 없으면 첫 번째 프레임을 적용합니다), " +
+                "animatorControllerPath(선택, Assets/ 상대 .controller 경로 — 이번 호출에 한해 항목 값을 덮어씁니다). " +
+                "반환 data: { prefabPath, scenePath, objectPath, appliedAssetPath, spriteName, linkedControllerPath }.",
                 ExecuteApplyAsset);
 
             McpToolRegistry.Register(
@@ -33,8 +40,9 @@ namespace MCPTools.Editor
                 "4단계 일괄 적용: AssetList의 모든 항목에 대해 확정본을 대상 프리팹/씬에 적용합니다 " +
                 "(씬 항목은 같은 씬끼리 묶어 씬을 한 번만 열어 처리). " +
                 "검증 실패/확정본 없는 항목은 건너뛰고 사유와 함께 failed로 반환합니다. " +
+                "항목에 animatorControllerPath가 있으면 프리팹 루트 Animator 연결까지 함께 수행합니다. " +
                 "파라미터: assetListPath(필수, Assets/ 상대 AssetList JSON). " +
-                "반환 data: { applied:[{id,prefabPath,objectPath,appliedAssetPath}], failed:[{id,reason}] }.",
+                "반환 data: { applied:[{id,prefabPath,objectPath,appliedAssetPath,linkedControllerPath}], failed:[{id,reason}] }.",
                 ExecuteApplyAll);
         }
 
@@ -57,6 +65,21 @@ namespace MCPTools.Editor
             }
 
             string assetPath = GetString(parameters, "assetPath");
+
+            // spriteName·animatorControllerPath가 넘어오면 이번 호출에 한해 항목 값을 덮어쓴다
+            // (AssetList JSON은 수정하지 않는다).
+            string spriteName = GetString(parameters, "spriteName");
+            if (spriteName != null)
+            {
+                item.spriteName = spriteName;
+            }
+
+            string controllerPath = GetString(parameters, "animatorControllerPath");
+            if (controllerPath != null)
+            {
+                item.animatorControllerPath = controllerPath;
+            }
+
             // 씬 항목(targetScenePath 지정)은 자동으로 씬 적용으로 분기된다.
             ApplyResult result = AssetApplier.Apply(item, assetPath);
             if (!result.success)
@@ -71,7 +94,9 @@ namespace MCPTools.Editor
                 { "prefabPath", result.prefabPath },
                 { "scenePath", result.scenePath },
                 { "objectPath", result.objectPath },
-                { "appliedAssetPath", result.appliedAssetPath }
+                { "appliedAssetPath", result.appliedAssetPath },
+                { "spriteName", item.spriteName ?? string.Empty },
+                { "linkedControllerPath", result.linkedControllerPath }
             };
         }
 
@@ -119,7 +144,8 @@ namespace MCPTools.Editor
                         { "prefabPath", result.prefabPath },
                         { "scenePath", result.scenePath },
                         { "objectPath", result.objectPath },
-                        { "appliedAssetPath", result.appliedAssetPath }
+                        { "appliedAssetPath", result.appliedAssetPath },
+                        { "linkedControllerPath", result.linkedControllerPath }
                     });
                 }
                 else

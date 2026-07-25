@@ -323,6 +323,48 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 
 확정본 자동 탐색: `Assets/Generated/3_Confirmed/GenerationResults.json`의 `outputPath` 기록을 우선 사용하고, 없으면 `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/{항목id}.flac|wav|mp3|ogg`)를 찾습니다. 하위 폴더 도입 이전 위치(`Assets/Generated/Images` 등)도 함께 탐색합니다.
 
+**스프라이트 시트 적용 (썸네일로 선택)**: 항목 상세의 "적용 대상 (수정 가능)" 박스에서 **[시트 고르기 (썸네일)]** 를 펼치면 `Assets/Generated/3_Confirmed/SpriteSheets/`의 시트가 **그림 그리드**로 나옵니다. 시트를 클릭하면(선택된 시트는 파란 테두리) 확정본 자동 탐색 대신 그 시트를 쓰고, **시트의 첫 프레임**이 `Image.sprite` / `SpriteRenderer.sprite`에 적용됩니다(재생 중에는 Animator가 프레임을 덮어쓰므로 초기 표시용입니다). [해제]로 미지정으로 되돌립니다. 프레임 이름을 직접 고르는 UI는 없으며, 특정 프레임이 필요하면 MCP `mcptools_apply_asset`의 `spriteName` 파라미터나 JSON의 `spriteName` 값으로 지정합니다. RawImage 대상은 Texture를 받으므로 `spriteName`을 지정하면 검증에서 걸러 안내합니다.
+
+**AnimatorController 자동 연결**: 한 시트에서 만든 클립·컨트롤러는 `Animations/{시트이름}/{시트이름}.controller` 한 벌뿐이므로, **시트를 고르면 그 컨트롤러가 자동으로 함께 연결**됩니다(따로 고르지 않습니다). 연결될 대상은 시트 아래 "애니메이터" 줄에 표시되고, 아직 컨트롤러를 만들지 않았으면 스프라이트만 적용한다고 알려줍니다. [적용] 시 **대상 프리팹 루트에 Animator를 붙이고**(이미 있으면 그대로 재사용) 컨트롤러를 연결합니다 — 스프라이트 적용과 같은 저장에서 한 번에 처리되며 Ctrl+Z로 되돌릴 수 있습니다.
+
+클립의 커브 경로는 Animator(=프리팹 루트) 기준이라, 컨트롤러의 클립이 참조하는 오브젝트 경로가 그 프리팹에 없으면 **적용 전에 검증에서 걸러** 어느 경로가 없는지 알려줍니다(연결해도 재생 시 스프라이트가 바뀌지 않기 때문입니다). 씬에 직접 배치된 오브젝트 항목에는 지원하지 않습니다. 시트 선택은 [저장]으로 AssetList JSON(`spriteSheetPath`)에 기록되며, 자동 연결과 다른 컨트롤러를 쓰려면 JSON이나 MCP의 `animatorControllerPath`로 직접 지정할 수 있습니다(지정 값이 자동 탐색보다 우선).
+
+## 스프라이트 시트 (SpriteSheet) 사용법
+
+메뉴: **`Tools/MCP/Sprite Sheet`**. ComfyUI가 아니라 **외부 AI(ChatGPT 이미지 생성 등)** 로 만든 멀티 행 시트를 다루는 별도 도구입니다. 한 장의 시트에 동작(walk/run/attack/…)을 행별로 담고, 그것을 잘라 Unity 스프라이트와 AnimationClip으로 만듭니다.
+
+> 슬라이스에는 **2D Sprite 패키지**가 필요합니다([요구 사항](#요구-사항) 참조).
+
+### 1) 프롬프트 생성 → 외부 AI
+
+동작 행 목록(동작명 + 프레임 수), 게임 장르·아트 스타일, 셀 크기·방향·배경을 입력하면 검증된 구조의 프롬프트를 만듭니다. AI CLI가 있으면 그것으로 다듬고, 없으면 템플릿으로 생성합니다. **[클립보드 복사]** 후 레퍼런스 이미지와 함께 외부 AI에 붙여넣어 시트를 생성하세요. 답변은 `Assets/Docs/SpriteSheetPrompt/`에 저장됩니다.
+
+### 2) 시트 임포트 — 검출 → 확인 → 적용
+
+1. **시트 png 경로**를 지정합니다(프로젝트 밖 파일도 됩니다).
+2. **임포트 행 목록** — 이 목록은 1번 섹션의 프롬프트용 행 목록과 **독립**입니다(다른 시트를 임포트할 수 있으므로). 행 추가/삭제, 동작명 직접 입력(프리셋 + 자유 입력), ▲▼ 순서 변경을 지원하며, **[1번 행 목록 가져오기]** 로 복사해올 수 있습니다. 행 순서는 시트의 위→아래에 대응합니다.
+3. **[배경 제거 + 격자 검출]** — 흰 배경을 외곽 flood-fill로 제거하고 AI가 그린 격자선을 검출합니다. **이 단계에서는 아무것도 기록하지 않습니다.**
+4. **검출 결과 표에서 확인·수정** — 행별 검출 프레임 수, 동작명 입력란, 프레임별 썸네일과 포함/제외 체크박스가 표시됩니다.
+   - 동작명은 **사람이 지정합니다.** `rowN` 같은 자동 이름을 붙이지 않으며, 이름이 빈 행이 있으면 [슬라이스 적용]이 비활성화되고 어느 행인지 알려줍니다.
+   - 콘텐츠 비율이 낮은 셀에는 **"비어 보임"** 표시가 붙고, 이런 프레임은 **검출 단계에서 자동으로 제외**되어 처음부터 없는 것처럼 처리됩니다. 시트 위/아래의 얇은 여백 줄이 행으로 검출된 경우도 그 행의 프레임이 전부 자동 제외되어 행 자체가 빠집니다(이름도 필요 없습니다). 실제 콘텐츠인데 제외됐다면 해당 셀을 **다시 체크**하면 되살아납니다. 자동 제외된 프레임 수는 검출 완료 메시지에 표시됩니다.
+5. **[슬라이스 적용]** — 배경 제거된 시트를 `Assets/Generated/3_Confirmed/SpriteSheets/{이름}_sheet.png`로 저장하고 Sprite Mode=Multiple 슬라이스를 기록합니다. 이름은 `{동작}_{프레임:00}`(예: `walk_01`)이고, 번호는 **포함한 프레임만 1부터 연속**으로 붙습니다.
+
+피벗은 셀 중앙이 기본이며, 발밑 고정 옵션을 쓰면 콘텐츠 수평 중앙 + 최하단으로 잡아 이동 애니메이션에서 발이 한 지점에 머뭅니다.
+
+### 3) 애니메이션 클립 생성
+
+슬라이스를 적용하면 **4. 애니메이션** 섹션이 그 시트를 대상으로 자동으로 채워집니다.
+
+- 동작 표: 동작명 / 프레임 수 / **루프 토글**(idle·walk·run 기본 ON, attack·death 기본 OFF) / 생성 체크 / 기존 클립 여부.
+- **대상 컴포넌트**(SpriteRenderer 또는 Image), **프레임 레이트**(기본 `spriteAnimationFrameRate` = 12), **대상 프리팹**(선택)과 **대상 오브젝트**(프리팹 계층 드롭다운, 선택)를 지정합니다.
+- **[클립 생성]** — 동작 1개당 클립 1개를 `Assets/Generated/3_Confirmed/Animations/{시트이름}/{동작}.anim`으로 만듭니다. 스프라이트는 이름 규칙(`{동작}_{번호}`, 마지막 `_` 기준)으로 묶고 번호 순으로 키를 놓습니다.
+- **[클립 + Animator 생성]** — 위에 더해 `{시트이름}.controller`를 만들고 동작별 State를 배치합니다. 대상 프리팹을 지정하면 **프리팹 루트에 Animator**를 붙이고 컨트롤러를 연결합니다(Undo 가능).
+  - Animator는 루트에, 클립의 커브 경로는 **대상 오브젝트 경로**로 기록됩니다. AnimationClip의 커브 경로는 Animator 기준 상대 경로이기 때문입니다.
+- **다시 실행해도 클립을 새로 만들지 않습니다** — 기존 클립은 커브·프레임 레이트·루프 설정만 갱신해 Animator 연결과 직접 붙인 이벤트를 보존합니다(덮어쓸 목록을 확인 다이얼로그로 먼저 보여줍니다). 기존 컨트롤러에는 **없는 State만 추가**하고 트랜지션·파라미터·기본 State는 건드리지 않습니다.
+- Image 대상인데 uGUI 패키지가 없으면 원인·조치를 안내합니다.
+
+만든 클립·컨트롤러를 **다른 프리팹에 붙이거나 나중에 다시 연결**하려면 4단계 적용 창의 [AnimatorController 연결](#4단계--적용-assetapplier-사용법)을 쓰면 됩니다. 시트 프레임을 프리팹에 꽂는 것도 같은 곳에서 합니다.
+
 ## 파이프라인 통합 창 (All-in-One)
 
 메뉴: **`Tools/MCP/Pipeline (All-in-One)`**
@@ -424,15 +466,18 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
   - `assetListPath: string` (필수) — 1단계 AssetList JSON 경로 (`Assets/` 상대).
   - `assetItemId: string` (필수) — 적용할 항목 id.
   - `assetPath: string` (선택) — 적용할 에셋 경로. 생략 시 확정본 자동 탐색 (`GenerationResults.json` → 규칙 경로).
-- 반환 `data`: `{ prefabPath, scenePath, objectPath, appliedAssetPath }`
+  - `spriteName: string` (선택) — 스프라이트 시트 안의 서브 스프라이트 이름(예: `walk_03`). 지정하면 시트 전체가 아니라 그 프레임을 적용합니다. 생략하고 항목 값도 비어 있으면 에셋 전체 스프라이트를, 시트처럼 전체 스프라이트가 없으면 **첫 프레임**을 적용합니다. **이번 호출에만 적용되는 값이며 AssetList JSON에는 기록하지 않습니다** — 영구 기록은 4단계 창에서 [저장]하세요.
+  - `animatorControllerPath: string` (선택) — 대상 프리팹 루트 Animator에 연결할 `.controller` 경로. 지정하면 항목 값을 이번 호출에만 덮어씁니다. **생략해도 항목에 `spriteSheetPath`가 있으면 그 시트의 컨트롤러(`Animations/{시트이름}/{시트이름}.controller`)가 있을 때 자동으로 연결**됩니다. 씬 항목에는 지원하지 않습니다.
+- 반환 `data`: `{ prefabPath, scenePath, objectPath, appliedAssetPath, spriteName, linkedControllerPath }`
 - 검증 실패(프리팹·씬/내부 경로/컴포넌트 없음, 임포트 타입 불일치 등) 시 `success:false` + `message`에 사유.
 - 항목의 `targetScenePath`가 채워져 있으면 자동으로 **씬 적용**으로 분기합니다: 씬이 이미 열려 있으면 그대로 값 변경 후 dirty 표시(저장은 사용자 몫, Ctrl+Z 가능), 열려 있지 않으면 Additive로 열어 적용·저장 후 닫습니다.
 
 ### `mcptools_apply_all` — 4단계 일괄 적용
 
 - 파라미터: `assetListPath: string` (필수)
-- 반환 `data`: `{ applied: [{ id, prefabPath, scenePath, objectPath, appliedAssetPath }], failed: [{ id, reason }] }`
+- 반환 `data`: `{ applied: [{ id, prefabPath, scenePath, objectPath, appliedAssetPath, linkedControllerPath }], failed: [{ id, reason }] }`
 - 씬 항목은 같은 씬끼리 묶어 씬을 한 번만 열어 처리합니다.
+- 항목에 `animatorControllerPath`가 있거나 `spriteSheetPath`의 시트에서 만든 컨트롤러가 있으면, 스프라이트 적용과 같은 저장에서 프리팹 루트 Animator 연결까지 수행합니다.
 - 확정본이 없거나 검증에 실패한 항목은 적용하지 않고 `failed`에 사유와 함께 담깁니다. 완료 후 `AssetDatabase.SaveAssets` 수행.
 
 ### `mcptools_run_pipeline` — 후반부(3~4단계) 자동화
@@ -449,6 +494,27 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
   - `failed` — 항목 단위 실패(생성/확정/적용): `[{ id, reason }]`. 부분 성공을 지원합니다.
   - 적용 대상 정보는 PromptSet의 `assetListPath` 메타로 AssetList를 로드해 얻습니다. `assetListPath`가 비어 있거나 파일이 없으면 확정본은 생성되지만 적용은 건너뛰고 `failed`에 안내됩니다.
 - **주의(동기 처리)**: 각 항목의 생성을 스레드풀에서 시작해 순차 완료를 대기하므로, **생성이 끝날 때까지 에디터 메인 스레드가 블로킹됩니다**(수 초~수 분). 창(3단계)은 Job 방식으로 멈추지 않지만, run_pipeline은 결과를 한 번에 반환하기 위해 이 블로킹을 감수합니다. 에디터를 멈추지 않고 진행하려면 3단계 창 또는 `mcptools_generate_candidates`(Job) 경로를 사용하세요.
+
+### `mcptools_spritesheet_build_prompt` — 시트 프롬프트 조립
+
+- 파라미터: `rows`(선택, `"walk:8,run:8,attack:8,death:10"` 형식), `useReferenceImage`(선택, 기본 true), `characterDescription`(선택 — `useReferenceImage=false`면 필수), `genre`·`artStyle`·`notes`(선택, 영어 자유 텍스트), `cellSize`(기본 256), `direction`(right/left), `background`(white/transparent)
+- 반환: 프롬프트 문자열 + 저장 경로. 반환한 프롬프트를 레퍼런스 이미지와 함께 외부 AI에 붙여넣어 시트를 만듭니다.
+
+### `mcptools_spritesheet_import` — 시트 슬라이스
+
+- 파라미터:
+  - `imagePath: string` (필수) — 절대 경로 또는 `Assets/` 상대 경로 png.
+  - `rows: string` (`dryRun=false`일 때 필수) — `"walk:8,run:8"` 형식, 시트의 **위 행부터 순서대로**.
+  - `dryRun: bool` (선택, 기본 false) — true면 배경 제거·격자 검출까지만 하고 **행 수 / 행별 프레임 수 / 셀 크기 / 자동 제외된 빈 셀(`autoExcludedEmptyCells`, 전체 개수는 `autoExcludedEmptyFrameCount`)** 만 반환하며 파일 저장·슬라이스를 하지 않습니다.
+  - `backgroundMode`(white/transparent), `pivotMode`(center/bottom — bottom은 발밑 피벗).
+- **비어 보이는 셀은 자동 제외됩니다.** 전경 픽셀 비율이 낮은 셀은 프레임이 없는 것으로 처리되며, `rowCount`·`totalFrameCount`·`framesPerRow`에 이미 반영된 값이 돌아옵니다. 시트 위/아래의 얇은 여백 줄이 행으로 검출된 경우 그 행은 통째로 빠지므로 `rows`에 이름을 넣을 필요가 없습니다.
+- **자동 행 이름(`rowN`)을 붙이지 않습니다.** 자동 제외 후 남은 행 수보다 `rows`가 적으면 어느 행의 이름이 비었는지 알리며 실패합니다. **먼저 `dryRun=true`로 검출 결과를 받아 `rows`를 채운 뒤 다시 호출하세요.**
+
+### `mcptools_spritesheet_build_clips` — 동작별 AnimationClip 생성
+
+- 파라미터: `sheetPath`(필수, `Assets/` 상대 시트 경로), `frameRate`(기본 12), `targetComponent`(`SpriteRenderer`|`Image`, 기본 SpriteRenderer), `loopActions`(루프 ON으로 둘 동작명 쉼표 나열 — 미지정 시 idle/walk/run ON 기본 규칙), `createController`(기본 false), `targetPrefabPath`(선택), `targetObjectPath`(선택 — 커브 경로로도 사용)
+- 반환 `data`: `{ sheetPath, frameRate, targetComponent, objectPath, clips[{action, clipPath, frameCount, loop, created}], controllerPath, addedStates, prefabPath, prefabLinked, skipped }`
+- 기존 클립은 새로 만들지 않고 커브·프레임 레이트·루프만 갱신하며, 기존 컨트롤러에는 없는 State만 추가합니다.
 
 ### `mcptools_status` — 진단
 

@@ -96,6 +96,14 @@ namespace MCPTools.Editor
         public int spritePixelsPerUnit = 100;
 
         /// <summary>
+        /// 스프라이트 시트에서 AnimationClip을 만들 때 사용할 기본 프레임 레이트(fps)입니다.
+        /// 클립의 키 시간은 <c>프레임 인덱스 / 이 값</c>으로 배치됩니다.
+        /// </summary>
+        [Tooltip("스프라이트 시트에서 만드는 AnimationClip의 기본 프레임 레이트(fps)입니다. " +
+                 "값이 클수록 애니메이션이 빨라집니다.")]
+        public int spriteAnimationFrameRate = 12;
+
+        /// <summary>
         /// 브리지 서버 시작 시 콘솔 창을 표시할지 여부입니다.
         /// false(기본)면 창 없이 실행되고 로그는 시스템 임시 폴더의 mcptools_bridge_server.log에 기록됩니다.
         /// </summary>

@@ -316,7 +316,9 @@ namespace MCPTools.Editor
     [McpForUnityTool("mcptools_apply_asset",
         Description = "4단계 적용: AssetList 항목 1개의 확정본을 대상 프리팹(targetScenePath 지정 시 씬 직접 배치 오브젝트)의 컴포넌트" +
                       "(Image.sprite/RawImage.texture/SpriteRenderer.sprite/AudioSource.clip)에 적용합니다. " +
-                      "파라미터: assetListPath(필수), assetItemId(필수), assetPath(선택, 생략 시 확정본 자동 탐색).")]
+                      "항목(또는 파라미터)에 animatorControllerPath가 있으면 프리팹 루트에 Animator를 붙이고 컨트롤러를 함께 연결합니다. " +
+                      "파라미터: assetListPath(필수), assetItemId(필수), assetPath(선택, 생략 시 확정본 자동 탐색), " +
+                      "spriteName(선택), animatorControllerPath(선택).")]
     public static class McpToolsApplyAssetTool
     {
         /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
@@ -334,10 +336,22 @@ namespace MCPTools.Editor
             [ToolParameter("적용할 에셋 경로 (Assets/ 기준 상대 경로). 생략하면 GenerationResults.json 기록과 " +
                            "Assets/Generated/3_Confirmed/Images(Audio)/{id}.* 규칙 경로에서 확정본을 자동 탐색합니다.", Required = false)]
             public string assetPath { get; set; }
+
+            /// <summary>시트 안에서 적용할 서브 스프라이트 이름.</summary>
+            [ToolParameter("(선택) 스프라이트 시트 안에서 적용할 서브 스프라이트 이름 (예: walk_03). " +
+                           "생략하면 항목 값을 쓰고, 그 값도 비어 있으면 에셋 전체(없으면 시트의 첫 프레임)를 적용합니다.",
+                Required = false)]
+            public string spriteName { get; set; }
+
+            /// <summary>프리팹 루트 Animator에 연결할 컨트롤러 경로.</summary>
+            [ToolParameter("(선택) 프리팹 루트 Animator에 연결할 AnimatorController 경로 (Assets/ 기준 상대 경로). " +
+                           "지정하면 이번 호출에 한해 항목 값을 덮어씁니다. 씬 항목에는 지원하지 않습니다.",
+                Required = false)]
+            public string animatorControllerPath { get; set; }
         }
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
-        /// <param name="params">파라미터 JSON 객체 (assetListPath, assetItemId, assetPath).</param>
+        /// <param name="params">파라미터 JSON 객체 (assetListPath, assetItemId, assetPath, spriteName, animatorControllerPath).</param>
         /// <returns>{"success":bool,"message":string,"data":{prefabPath,objectPath,appliedAssetPath}} 형태의 응답 객체.</returns>
         public static object HandleCommand(JObject @params)
         {
@@ -505,9 +519,14 @@ namespace MCPTools.Editor
                       "외곽 시드 BFS로 배경을 투명화(유채색 글로우 이펙트 보존)한 뒤 시트에 그려진 격자선을 직접 검출해 " +
                       "균일 셀 경계를 만들고 재조립 없이 원본 셀 위치 그대로 Assets/Generated/3_Confirmed/SpriteSheets/{name}_sheet.png로 저장하고 " +
                       "행 동작명 기반(walk_01~) Sprite Mode=Multiple 슬라이스를 적용합니다. 격자선이 곧 정답이므로 행/프레임 수가 " +
-                      "rows와 달라도 검출된 격자 그대로 임포트합니다. " +
-                      "파라미터: imagePath(필수, 절대 또는 Assets/ 상대 png), rows(필수, \"walk:8,run:8,attack:8,death:10\" 형식 — " +
-                      "위 행부터 순서대로), backgroundMode(선택, white/transparent, 기본 white), " +
+                      "rows와 달라도 검출된 격자 그대로 임포트하되, 자동 행 이름(rowN)은 붙이지 않습니다 — 검출 행 수보다 rows가 " +
+                      "적으면 어느 행의 이름이 비었는지 알리며 실패합니다. 전경 픽셀이 거의 없어 비어 보이는 셀은 자동으로 " +
+                      "제외되고, 그 결과 프레임이 하나도 남지 않은 행(여백 밴드 등)은 통째로 빠집니다. " +
+                      "먼저 dryRun=true로 검출 결과를 받아 rows를 채운 뒤 다시 호출하세요. " +
+                      "파라미터: imagePath(필수, 절대 또는 Assets/ 상대 png), rows(dryRun=false일 때 필수, " +
+                      "\"walk:8,run:8,attack:8,death:10\" 형식 — 위 행부터 순서대로), " +
+                      "dryRun(선택, 기본 false — true면 배경 제거·격자 검출까지만 하고 행 수/행별 프레임 수/셀 크기/자동 제외된 " +
+                      "빈 셀 정보만 반환하며 파일 저장·슬라이스를 하지 않음), backgroundMode(선택, white/transparent, 기본 white), " +
                       "pivotMode(선택, center/bottom, 기본 center — bottom이면 피벗을 발밑에 두어 이동 애니메이션 흔들림 감소).")]
     public static class McpToolsSpriteSheetImportTool
     {
@@ -518,9 +537,16 @@ namespace MCPTools.Editor
             [ToolParameter("시트 png 경로 (절대 경로 또는 Assets/ 기준 상대 경로).", Required = true)]
             public string imagePath { get; set; }
 
-            /// <summary>행 정의 ("동작명:프레임수" 쉼표 나열, 위 행부터).</summary>
-            [ToolParameter("행 정의 (\"walk:8,run:8,attack:8,death:10\" 형식 — 시트의 위 행부터 순서대로).", Required = true)]
+            /// <summary>행 정의 ("동작명:프레임수" 쉼표 나열, 위 행부터). dryRun=false일 때 필수.</summary>
+            [ToolParameter("행 정의 (\"walk:8,run:8,attack:8,death:10\" 형식 — 시트의 위 행부터 순서대로). " +
+                           "dryRun=false일 때 필수이며, 검출된 행 수보다 적으면 자동 이름 없이 실패합니다.", Required = false)]
             public string rows { get; set; }
+
+            /// <summary>검출만 수행할지 여부.</summary>
+            [ToolParameter("true면 배경 제거·격자 검출까지만 하고 검출 결과(행 수, 행별 프레임 수, 셀 크기, 자동 제외된 빈 셀)만 " +
+                           "반환하며 파일 저장·슬라이스를 하지 않습니다. 기본 false.",
+                Required = false, DefaultValue = "false")]
+            public bool dryRun { get; set; }
 
             /// <summary>배경 모드.</summary>
             [ToolParameter("배경 모드 (white/transparent). 기본 white.", Required = false, DefaultValue = "white")]
@@ -533,11 +559,82 @@ namespace MCPTools.Editor
         }
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
-        /// <param name="params">파라미터 JSON 객체 (imagePath, rows, backgroundMode, pivotMode).</param>
-        /// <returns>{"success":bool,"message":string,"data":{assetPath,rowCount,totalFrameCount,framesPerRow,...}} 형태의 응답 객체.</returns>
+        /// <param name="params">파라미터 JSON 객체 (imagePath, rows, dryRun, backgroundMode, pivotMode).</param>
+        /// <returns>
+        /// {"success":bool,"message":string,"data":{assetPath,rowCount,totalFrameCount,framesPerRow,...}} 형태의 응답 객체.
+        /// dryRun=true면 assetPath 없이 검출 결과(rowCount, framesPerRow, cellWidth/Height)만 담깁니다.
+        /// </returns>
         public static object HandleCommand(JObject @params)
         {
             return McpForUnityAdapter.Handle("mcptools_spritesheet_import", @params);
+        }
+    }
+
+    /// <summary>
+    /// 스프라이트 시트 클립 생성 도구(mcptools_spritesheet_build_clips)를 MCP for Unity에 노출합니다.
+    /// 슬라이스된 시트의 서브 스프라이트를 동작별로 묶어 AnimationClip을 만들고,
+    /// 옵션에 따라 AnimatorController 구성 + 대상 프리팹 연결까지 수행합니다.
+    /// </summary>
+    [McpForUnityTool("mcptools_spritesheet_build_clips",
+        Description = "슬라이스가 끝난 스프라이트 시트의 서브 스프라이트({동작}_{번호})를 동작별로 묶어 " +
+                      "Assets/Generated/3_Confirmed/Animations/{시트이름}/{동작}.anim AnimationClip을 만듭니다. " +
+                      "같은 경로에 클립이 있으면 새로 만들지 않고 커브·프레임 레이트·루프 설정만 덮어씁니다 " +
+                      "(Animator 참조와 붙여 둔 애니메이션 이벤트 보존). createController=true면 {시트이름}.controller를 만들고 " +
+                      "동작별 State를 배치하며(기존 컨트롤러는 없는 State만 추가, 트랜지션·파라미터는 유지), " +
+                      "targetPrefabPath를 함께 주면 프리팹 루트에 Animator를 붙이고 컨트롤러를 할당합니다. " +
+                      "파라미터: sheetPath(필수), frameRate(선택, 기본 12), targetComponent(선택, SpriteRenderer|Image), " +
+                      "loopActions(선택, 루프 ON 동작명 쉼표 나열 — 미지정 시 idle/walk/run ON 기본 규칙), " +
+                      "createController(선택, 기본 false), targetPrefabPath(선택), targetObjectPath(선택). " +
+                      "반환 data: { sheetPath, frameRate, targetComponent, objectPath, clips:[{action,clipPath,frameCount,loop,created}], " +
+                      "controllerPath, addedStates, prefabPath, prefabLinked, skipped }.")]
+    public static class McpToolsSpriteSheetBuildClipsTool
+    {
+        /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
+        public class Parameters
+        {
+            /// <summary>슬라이스된 시트 텍스처 경로 (Assets/ 기준 상대 경로).</summary>
+            [ToolParameter("슬라이스가 끝난 시트 텍스처 경로 (Assets/ 기준 상대 경로, 예: " +
+                           "Assets/Generated/3_Confirmed/SpriteSheets/hero_sheet.png).", Required = true)]
+            public string sheetPath { get; set; }
+
+            /// <summary>클립 프레임 레이트(fps).</summary>
+            [ToolParameter("클립 프레임 레이트(fps). 키 시간은 프레임 인덱스/frameRate로 배치됩니다. 기본 12.",
+                Required = false, DefaultValue = "12")]
+            public int frameRate { get; set; }
+
+            /// <summary>스프라이트 커브 대상 컴포넌트.</summary>
+            [ToolParameter("스프라이트 커브 대상 컴포넌트 (SpriteRenderer | Image). 기본 SpriteRenderer. " +
+                           "Image는 uGUI 패키지(com.unity.ugui)가 설치되어 있어야 합니다.",
+                Required = false, DefaultValue = "SpriteRenderer")]
+            public string targetComponent { get; set; }
+
+            /// <summary>루프 ON으로 둘 동작명 목록 (쉼표 구분).</summary>
+            [ToolParameter("루프 재생으로 둘 동작명 쉼표 나열 (예: \"idle,walk,run\"). 지정하면 목록에 없는 동작은 루프 OFF가 되고, " +
+                           "생략하면 기본 규칙(idle/walk/run ON, 그 외 OFF)을 사용합니다.", Required = false)]
+            public string loopActions { get; set; }
+
+            /// <summary>AnimatorController 생성 여부.</summary>
+            [ToolParameter("true면 {시트이름}.controller를 만들고 동작별 State를 배치합니다. 기본 false(클립만 생성).",
+                Required = false, DefaultValue = "false")]
+            public bool createController { get; set; }
+
+            /// <summary>Animator를 연결할 프리팹 경로.</summary>
+            [ToolParameter("Animator + 컨트롤러를 연결할 프리팹 경로 (Assets/ 기준 상대 경로). " +
+                           "createController=true일 때만 사용됩니다.", Required = false)]
+            public string targetPrefabPath { get; set; }
+
+            /// <summary>스프라이트 컴포넌트가 있는 오브젝트의 프리팹 루트 기준 경로.</summary>
+            [ToolParameter("스프라이트 컴포넌트가 있는 오브젝트의 프리팹 루트 기준 계층 경로 (예: \"Body/Sprite\"). " +
+                           "클립 커브 경로로도 사용되며, 생략하면 루트 자신을 대상으로 합니다.", Required = false)]
+            public string targetObjectPath { get; set; }
+        }
+
+        /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
+        /// <param name="params">파라미터 JSON 객체 (sheetPath, frameRate, targetComponent, loopActions, createController, targetPrefabPath, targetObjectPath).</param>
+        /// <returns>{"success":bool,"message":string,"data":{clips,controllerPath,prefabLinked,skipped,...}} 형태의 응답 객체.</returns>
+        public static object HandleCommand(JObject @params)
+        {
+            return McpForUnityAdapter.Handle("mcptools_spritesheet_build_clips", @params);
         }
     }
 }

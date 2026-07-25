@@ -18,6 +18,7 @@ namespace MCPTools.Editor
         private const float PrimaryButtonHeight = 30f;
         private const float SmallButtonWidth = 80f;
         private const float ThumbnailSize = 140f;
+        private const float SheetThumbnailSize = 96f;
         private const float LeftColumnWidth = 380f;
 
         /// <summary>항목 1개의 표시 상태입니다.</summary>
@@ -58,6 +59,12 @@ namespace MCPTools.Editor
         private string _loadedListPath;
         private bool _targetsDirty;
 
+        /// <summary>확정본 SpriteSheets 폴더에서 찾은 시트 png 목록 (썸네일 선택기 항목).</summary>
+        private string[] _sheetPaths = new string[0];
+
+        /// <summary>시트 썸네일 선택기를 펼쳐 두었는지 여부입니다.</summary>
+        private bool _sheetPickerOpen;
+
         /// <summary>적용 창을 엽니다.</summary>
         [MenuItem("Tools/MCP/4. Asset Applier", false, 4)]
         public static void Open()
@@ -72,6 +79,18 @@ namespace MCPTools.Editor
         {
             _settings = MCPToolSettings.GetOrCreate();
             RefreshAssetListPaths();
+            RefreshSpriteAssetPaths();
+        }
+
+        /// <summary>다른 창에서 만든 시트·컨트롤러가 드롭다운에 바로 보이도록 포커스마다 목록을 다시 읽습니다.</summary>
+        private void OnFocus()
+        {
+            if (_settings == null)
+            {
+                _settings = MCPToolSettings.GetOrCreate();
+            }
+
+            RefreshSpriteAssetPaths();
         }
 
         private void OnGUI()
@@ -228,6 +247,11 @@ namespace MCPTools.Editor
                     DrawPrefabTargetFields(item);
                 }
 
+                if (item.assetType != "audio")
+                {
+                    DrawSpriteSourceFields(item);
+                }
+
                 if (item.assetType == "audio")
                 {
                     item.targetComponent = EditorGUILayout.TextField(
@@ -284,9 +308,20 @@ namespace MCPTools.Editor
                 UnityEngine.Object newAsset = null;
                 if (!string.IsNullOrEmpty(state.confirmedPath))
                 {
-                    newAsset = item.assetType == "audio"
-                        ? AssetDatabase.LoadAssetAtPath<AudioClip>(state.confirmedPath)
-                        : (UnityEngine.Object)AssetDatabase.LoadAssetAtPath<Texture2D>(state.confirmedPath);
+                    if (item.assetType == "audio")
+                    {
+                        newAsset = AssetDatabase.LoadAssetAtPath<AudioClip>(state.confirmedPath);
+                    }
+                    else
+                    {
+                        // 실제 적용과 같은 규칙(이름 지정 → 에셋 전체 → 시트 첫 프레임)으로 찾아
+                        // 미리보기와 적용 결과가 어긋나지 않게 한다.
+                        newAsset = AssetApplier.FindItemSprite(state.confirmedPath, item);
+                        if (newAsset == null)
+                        {
+                            newAsset = AssetDatabase.LoadAssetAtPath<Texture2D>(state.confirmedPath);
+                        }
+                    }
                 }
 
                 DrawPreviewCell("새 확정본", newAsset);
@@ -359,6 +394,198 @@ namespace MCPTools.Editor
                     GUI.changed = true;
                 }
             }
+        }
+
+        /// <summary>
+        /// 이미지/UI 항목의 스프라이트 시트 선택 UI를 그립니다.
+        /// 확정본 SpriteSheets 폴더의 시트를 <b>썸네일 그리드</b>로 보여주고, 고른 시트의 첫 프레임이 적용됩니다
+        /// (재생 중에는 Animator가 프레임을 덮어쓰므로 초기 표시용입니다).
+        /// 시트를 고르면 그 시트에서 만든 AnimatorController가 <b>자동으로 함께 연결</b>되므로
+        /// 컨트롤러를 따로 고르지 않고, 연결될 대상만 아래에 표시합니다.
+        /// </summary>
+        private void DrawSpriteSourceFields(AssetListItem item)
+        {
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                EditorGUILayout.PrefixLabel(new GUIContent("스프라이트 시트",
+                    $"{MCPToolFolders.SpriteSheetsDir(_settings)} 폴더의 시트를 썸네일로 고릅니다. " +
+                    "고르면 확정본 자동 탐색 대신 이 시트의 첫 프레임을 적용하고, 시트의 컨트롤러도 함께 연결합니다."));
+                EditorGUILayout.LabelField(
+                    string.IsNullOrEmpty(item.spriteSheetPath)
+                        ? "(미지정 — 확정본 자동 탐색)"
+                        : Path.GetFileNameWithoutExtension(item.spriteSheetPath));
+
+                using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(item.spriteSheetPath)))
+                {
+                    bool changedBeforeClear = GUI.changed;
+                    bool clear = GUILayout.Button("해제", GUILayout.Width(50f));
+                    GUI.changed = changedBeforeClear;
+                    if (clear)
+                    {
+                        SelectSheet(item, string.Empty);
+                    }
+                }
+            }
+
+            // 폴드아웃 자체는 항목 값을 바꾸지 않는다. GUI.changed를 되돌려 "수정됨"으로 잘못 표시되지 않게 한다.
+            bool changedBeforeFoldout = GUI.changed;
+            _sheetPickerOpen = EditorGUILayout.Foldout(_sheetPickerOpen, "시트 고르기 (썸네일)", true);
+            GUI.changed = changedBeforeFoldout;
+
+            if (_sheetPickerOpen)
+            {
+                DrawSheetGrid(item);
+            }
+
+            if (!string.IsNullOrEmpty(item.spriteSheetPath))
+            {
+                EditorGUILayout.LabelField("시트 경로", item.spriteSheetPath, EditorStyles.miniLabel);
+            }
+
+            DrawLinkedControllerInfo(item);
+        }
+
+        /// <summary>확정본 SpriteSheets 폴더의 시트를 썸네일 그리드로 그립니다 (클릭하면 선택).</summary>
+        private void DrawSheetGrid(AssetListItem item)
+        {
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                if (_sheetPaths.Length == 0)
+                {
+                    EditorGUILayout.LabelField(
+                        $"{MCPToolFolders.SpriteSheetsDir(_settings)} 폴더에 시트가 없습니다.\n" +
+                        "스프라이트 시트 창(Tools/MCP/Sprite Sheet)에서 시트를 먼저 슬라이스해주세요.",
+                        EditorStyles.wordWrappedMiniLabel);
+                    return;
+                }
+
+                // 상세 패널 폭에 맞춰 한 줄에 넣을 개수를 계산한다 (좌측 목록 폭과 여백 제외).
+                float available = position.width - LeftColumnWidth - 60f;
+                int perLine = Mathf.Max(1, (int)(available / (SheetThumbnailSize + 14f)));
+                for (int i = 0; i < _sheetPaths.Length; i++)
+                {
+                    if (i % perLine == 0)
+                    {
+                        EditorGUILayout.BeginHorizontal();
+                    }
+
+                    DrawSheetCell(item, _sheetPaths[i]);
+
+                    if (i % perLine == perLine - 1 || i == _sheetPaths.Length - 1)
+                    {
+                        GUILayout.FlexibleSpace();
+                        EditorGUILayout.EndHorizontal();
+                    }
+                }
+            }
+        }
+
+        /// <summary>시트 썸네일 1개(그림 + 이름)를 그립니다. 클릭하면 그 시트를 선택합니다.</summary>
+        private void DrawSheetCell(AssetListItem item, string sheetPath)
+        {
+            bool selected = string.Equals(item.spriteSheetPath, sheetPath, StringComparison.OrdinalIgnoreCase);
+            using (new EditorGUILayout.VerticalScope(GUILayout.Width(SheetThumbnailSize + 10f)))
+            {
+                Rect rect = GUILayoutUtility.GetRect(
+                    SheetThumbnailSize, SheetThumbnailSize,
+                    GUILayout.Width(SheetThumbnailSize), GUILayout.Height(SheetThumbnailSize));
+
+                // 선택 강조 테두리 + 투명 영역이 보이도록 어두운 배경을 깔고 그 위에 시트를 그린다.
+                EditorGUI.DrawRect(new Rect(rect.x - 2f, rect.y - 2f, rect.width + 4f, rect.height + 4f),
+                    selected ? new Color(0.35f, 0.6f, 0.95f) : new Color(0f, 0f, 0f, 0.25f));
+                EditorGUI.DrawRect(rect, new Color(0.22f, 0.22f, 0.22f, 1f));
+
+                var texture = AssetDatabase.LoadAssetAtPath<Texture2D>(sheetPath);
+                if (texture != null)
+                {
+                    GUI.DrawTexture(rect, texture, ScaleMode.ScaleToFit, true);
+                }
+
+                // 클릭 자체로 GUI.changed가 서므로 되돌리고, 실제로 값이 바뀔 때만 SelectSheet가 다시 세운다
+                // (이미 선택된 시트를 눌러도 "수정됨"이 되지 않게 한다).
+                bool changedBeforeClick = GUI.changed;
+                bool clicked = GUI.Button(rect, new GUIContent(string.Empty, sheetPath), GUIStyle.none);
+                GUI.changed = changedBeforeClick;
+                if (clicked)
+                {
+                    SelectSheet(item, sheetPath);
+                }
+
+                EditorGUILayout.LabelField(
+                    Path.GetFileNameWithoutExtension(sheetPath),
+                    selected ? EditorStyles.miniBoldLabel : EditorStyles.miniLabel,
+                    GUILayout.Width(SheetThumbnailSize + 8f));
+            }
+        }
+
+        /// <summary>시트 선택을 항목에 반영합니다 (빈 경로면 해제). 프레임 이름은 첫 프레임 기본값으로 되돌립니다.</summary>
+        private void SelectSheet(AssetListItem item, string sheetPath)
+        {
+            if (string.Equals(item.spriteSheetPath ?? string.Empty, sheetPath, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            item.spriteSheetPath = sheetPath;
+
+            // 프레임 이름 지정 UI가 없으므로, 시트를 바꿀 때 옛 이름이 남아 검증 실패가 되지 않게 지운다.
+            item.spriteName = string.Empty;
+
+            // 컨트롤러는 시트에서 자동으로 찾으므로, 손으로 넣었던 값도 함께 비워 자동 연결을 따르게 한다.
+            item.animatorControllerPath = string.Empty;
+            GUI.changed = true;
+        }
+
+        /// <summary>적용 시 연결될 AnimatorController를 표시합니다 (시트에서 자동으로 찾습니다).</summary>
+        private void DrawLinkedControllerInfo(AssetListItem item)
+        {
+            if (item.IsSceneItem)
+            {
+                return; // 씬 항목은 컨트롤러 자동 연결을 지원하지 않는다.
+            }
+
+            string controllerPath = AssetApplier.ResolveAnimatorControllerPath(item);
+            if (!string.IsNullOrEmpty(controllerPath))
+            {
+                EditorGUILayout.LabelField("애니메이터", $"{controllerPath} (프리팹 루트에 자동 연결)",
+                    EditorStyles.miniLabel);
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(item.spriteSheetPath))
+            {
+                EditorGUILayout.LabelField("애니메이터",
+                    "이 시트의 컨트롤러가 없어 스프라이트만 적용합니다. " +
+                    "(스프라이트 시트 창에서 [클립 + Animator 생성]을 먼저 실행하세요)",
+                    EditorStyles.wordWrappedMiniLabel);
+            }
+        }
+
+        /// <summary>
+        /// 확정본 SpriteSheets 폴더의 시트(png) 목록을 다시 읽습니다.
+        /// (창을 열 때·포커스를 받을 때 호출 — 다른 창에서 방금 만든 시트가 바로 목록에 나타나게 합니다)
+        /// </summary>
+        private void RefreshSpriteAssetPaths()
+        {
+            _sheetPaths = CollectAssetPaths(MCPToolFolders.SpriteSheetsDir(_settings), "*.png");
+        }
+
+        /// <summary>폴더(하위 폴더 포함)에서 패턴에 맞는 파일을 이름순으로 모읍니다. 폴더가 없으면 빈 배열.</summary>
+        private static string[] CollectAssetPaths(string folder, string searchPattern)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
+            {
+                return new string[0];
+            }
+
+            string[] paths = Directory.GetFiles(folder, searchPattern, SearchOption.AllDirectories);
+            for (int i = 0; i < paths.Length; i++)
+            {
+                paths[i] = paths[i].Replace('\\', '/');
+            }
+
+            Array.Sort(paths, StringComparer.OrdinalIgnoreCase);
+            return paths;
         }
 
         /// <summary>드롭다운 앞에 "(선택...)" 항목을 붙인 라벨 배열을 만듭니다.</summary>

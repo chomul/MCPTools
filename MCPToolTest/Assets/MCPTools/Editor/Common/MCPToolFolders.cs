@@ -43,6 +43,12 @@ namespace MCPTools.Editor
         /// </summary>
         internal const string SpriteSheetsFolder = "SpriteSheets";
 
+        /// <summary>
+        /// 스프라이트 시트에서 만든 AnimationClip·AnimatorController가 저장되는 확정본 하위 폴더 이름입니다.
+        /// 시트별 하위 폴더(<c>Animations/{시트이름}/</c>)로 나뉩니다.
+        /// </summary>
+        internal const string AnimationsFolder = "Animations";
+
         /// <summary>하위 폴더 도입 이전의 후보 폴더 이름입니다 (읽기 폴백 전용).</summary>
         internal const string LegacyCandidatesFolder = "Candidates";
 
@@ -94,6 +100,15 @@ namespace MCPTools.Editor
         internal static string SpriteSheetsDir(MCPToolSettings settings)
         {
             return $"{ConfirmedRoot(settings)}/{SpriteSheetsFolder}";
+        }
+
+        /// <summary>
+        /// 스프라이트 시트에서 만든 애니메이션 에셋이 시트별 하위 폴더로 놓이는 폴더입니다.
+        /// (실제 클립 경로: <c>{이 폴더}/{시트이름}/{동작}.anim</c>)
+        /// </summary>
+        internal static string AnimationsDir(MCPToolSettings settings)
+        {
+            return $"{ConfirmedRoot(settings)}/{AnimationsFolder}";
         }
 
         /// <summary>
