@@ -1,0 +1,77 @@
+name: CI
+
+# =============================================================================
+# docs/릴리스절차.md "커밋 전 점검 목록" 자동화 (Task9 Q3)
+#
+# Unity 라이선스가 필요한 검사(컴파일 · Test Runner 실행)는 범위 밖이다.
+# 필요해지면 game-ci/unity-test-runner + 개인 라이선스 시크릿으로 후속 확장한다.
+#
+# 각 점검은 독립 step 이고 전부 `if: always()` 라서, 하나가 실패해도 나머지
+# 결과를 한 번에 볼 수 있다. 실패 사유는 각 스크립트가 한 줄로 출력하고
+# ::error:: 주석 + 실행 요약 표에도 남긴다.
+# =============================================================================
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']       # 태그 push 일 때만 버전 3중 비교가 태그까지 포함한다
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-checks:
+    name: 릴리스 사전 점검
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 준비 (JSON 파싱 · py_compile 용)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 요약 표 머리글
+        if: always()
+        run: |
+          {
+            echo "## 릴리스 사전 점검 (docs/릴리스절차.md)"
+            echo ""
+            echo "| 결과 | 점검 | 내용 |"
+            echo "|------|------|------|"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # 릴리스절차 §커밋 전 점검 목록 → ".meta 누락 없음"
+      - name: .meta 누락 점검
+        if: always()
+        run: bash .github/scripts/check-meta.sh
+
+      # 릴리스절차 §버전 3중 동기 (package.json ↔ MCPToolsInfo ↔ git 태그)
+      # 태그 push 일 때만 GITHUB_REF_TYPE=tag 가 되어 태그까지 3중 비교한다.
+      - name: 버전 3중 동기 점검
+        if: always()
+        run: bash .github/scripts/check-version.sh
+
+      # 릴리스절차 §커밋 전 점검 목록 → "Server~/ 포함" (파일 존재)
+      - name: Server~ 필수 파일 점검
+        if: always()
+        run: bash .github/scripts/check-server-files.sh
+
+      # 릴리스절차 §커밋 전 점검 목록 → "Server~/ 포함" (브리지 서버 문법)
+      - name: Python 문법 점검 (bridge_server.py)
+        if: always()
+        run: bash .github/scripts/check-python.sh
+
+      # 릴리스절차 §커밋 전 점검 목록 → "package.json 유효성" (+ 워크플로/매니페스트)
+      - name: JSON 유효성 점검
+        if: always()
+        run: bash .github/scripts/check-json.sh
+
+      # 릴리스절차 §커밋 전 점검 목록 → "개인 값 미포함"
+      - name: 개인 값·절대 경로 점검
+        if: always()
+        run: bash .github/scripts/check-personal.sh

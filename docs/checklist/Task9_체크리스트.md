@@ -32,14 +32,20 @@
 
 ### Q3. CI 워크플로
 
-- [ ] `.github/workflows/ci.yml` 생성 (push / PR / tag)
-- [ ] `.meta` 누락 검사 (릴리스절차의 명령 그대로)
-- [ ] 버전 3중 동기 검사 (`package.json` ↔ `MCPToolsInfo.Version` ↔ 태그)
-- [ ] `python -m py_compile bridge_server.py`
-- [ ] JSON 유효성 (`workflows/*.json`, `variables.json`, `package.json`)
-- [ ] 개인 값·절대 경로 스캔 (`MCPToolSettings.asset` 커밋 여부, `C:\` 패턴)
-- [ ] `Server~` 필수 파일 존재 검사
-- [ ] 실패 시 원인을 한 줄로 출력
+- [x] `.github/workflows/ci.yml` 생성 (push / PR / tag / workflow_dispatch)
+- [x] `.meta` 누락 검사 (릴리스절차의 명령 그대로)
+- [x] 버전 3중 동기 검사 (`package.json` ↔ `MCPToolsInfo.Version` ↔ 태그)
+- [x] `python -m py_compile bridge_server.py`
+- [x] JSON 유효성 (`workflows/*.json`, `variables.json`, `package.json`, `Packages/manifest.json` 총 8개)
+- [x] 개인 값·절대 경로 스캔 (`MCPToolSettings.asset` 커밋 여부, 절대 경로 패턴)
+- [x] `Server~` 필수 파일 존재 검사 (7종)
+- [x] 실패 시 원인을 한 줄로 출력 (`FAIL [점검명] 사유` + `::error::` + 실행 요약 표)
+  - 구현 결과: 점검 6개를 각각 `.github/scripts/check-*.sh`로 분리하고 `_lib.sh`(저장소 루트 이동 / `fail`·`pass` / Python 실행 파일 탐지)를 공유한다. 워크플로는 `ubuntu-latest` + `actions/checkout@v4` + `setup-python@v5`, 모든 step에 `if: always()`를 걸어 하나가 실패해도 나머지 결과를 함께 볼 수 있다. 각 step 주석에 릴리스절차의 대응 항목을 명시했다.
+  - **절대 경로 스캔 오탐 회피**: 순진한 `C:\` grep은 정상 코드를 잡는다(`ComfyUIServerLauncher.cs:167`의 사용자 안내 예시 `C:\Unity\<프로젝트명>`, `:881`의 `"C:"` 설명 주석). 주석을 제외하는 대신(주석에 박힌 개인 경로도 유출이므로) **드라이브 문자 + 홈/설치 성격 세그먼트**(`Users`/`Program Files`/`ProgramData`/`Projects` 등)가 이어질 때만 매치하도록 패턴을 좁혔다. POSIX는 `/home/<이름>/`·`/Users/<이름>/`만 본다.
+  - **`python3` 폴백**: Windows Git Bash의 `python3`는 Microsoft Store 스텁이라 실행되지 않는다. `_lib.sh`가 `python3 → python → py` 순으로 실제 Python 3를 탐지해 CI와 로컬 양쪽에서 동작한다.
+  - 통합 시 정리: 서브에이전트가 만든 `.github/.gitattributes`를 삭제하고 **루트 `.gitattributes`에 `*.sh text eol=lf`를 추가**했다(Task 7이 세운 단일 `.gitattributes` 규약 유지, `*.yml`은 이미 루트에 있음).
+  - 검증 상태: **현재 HEAD에서 6개 전부 PASS(주 에이전트가 독립 재실행해 확인)**. 실패 경로도 확인 — 태그 불일치(`v9.9.9`) 시 `FAIL [버전 3중 동기] 태그(v9.9.9) 와 package.json(0.2.0)…` 한 줄로 종료(exit 1). 서브에이전트가 격리 픽스처 저장소에서 `.meta` 삭제 / JSON 파손 / `Server~` 미추적 / 문법 오류 / `MCPToolSettings.asset` 커밋 / 절대 경로 유출 시뮬레이션을 수행해 전부 검출을 확인했고, 오탐 대조군 4종은 통과했다. **GitHub Actions 실제 실행 확인은 푸시 후 필요.**
+  - 관련 파일: `.github/workflows/ci.yml`, `.github/scripts/*.sh`(7개), `.gitattributes`
 
 ### Q4. Task 8 S1 계획 정정 (문서만)
 
