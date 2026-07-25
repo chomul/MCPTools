@@ -19,16 +19,23 @@
 
 ### Q2. EditMode 테스트
 
-- [ ] `Tests/EditMode/MCPTools.Editor.Tests.asmdef` — Editor 전용, `MCPTools.Editor`·`MCPTools.Runtime`·nunit 참조, `defineConstraints: ["UNITY_INCLUDE_TESTS"]`
-- [ ] `MiniJson` 왕복 테스트 (중첩·유니코드·이스케이프·정수/실수 타입, 로케일 무관)
-- [ ] `AssetListDocument` 왕복 + **구 JSON(키 누락) 로드 시 기본값** 테스트
-- [ ] `PromptSetDocument` 왕복 테스트
-- [ ] `SpriteSheetImporter.Detect` — 합성 픽셀 버퍼로 격자 검출 / 셀 수 / "비어 보임" 자동 제외 / 셀 크기
-- [ ] `SpriteSheetImporter`에 픽셀 버퍼를 받는 internal 오버로드 + `InternalsVisibleTo` 추가
-- [ ] `SpriteSheetPromptBuilder.ParseRows` / `SanitizeActionName`
-- [ ] `SpriteSheetClipBuilder.ControllerPathForSheet`
-- [ ] `MCPToolFolders` — 신·구 위치 폴백, 경로 조합, `EnsureAssetFolder` 경로 검증
-- [ ] 파일/AssetDatabase를 쓰는 테스트는 `[TearDown]`에서 생성물 정리
+- [x] `Tests/EditMode/MCPTools.Editor.Tests.asmdef` — Editor 전용, `MCPTools.Editor`·`MCPTools.Runtime`·nunit 참조, `defineConstraints: ["UNITY_INCLUDE_TESTS"]`
+- [x] `MiniJson` 왕복 테스트 (중첩·유니코드·이스케이프·정수/실수 타입, 로케일 무관)
+- [x] `AssetListDocument` 왕복 + **구 JSON(키 누락) 로드 시 기본값** 테스트
+- [x] `PromptSetDocument` 왕복 테스트
+- [x] `SpriteSheetImporter.Detect` — 합성 시트로 격자 검출 / 셀 수 / "비어 보임" 자동 제외 / 셀 크기 / rect / 배경 제거 결과
+- [~] ~~`SpriteSheetImporter`에 픽셀 버퍼를 받는 internal 오버로드~~ — **불필요해 하지 않음**(아래 설계 변경). `InternalsVisibleTo`는 새 파일 `Editor/AssemblyInfo.cs`에 추가
+- [x] `SpriteSheetPromptBuilder.ParseRows` / `SanitizeActionName`
+- [x] `SpriteSheetClipBuilder.ControllerPathForSheet`
+- [x] `MCPToolFolders` — 신·구 위치 폴백, 경로 조합, `FindDocuments`, `EnsureAssetFolder` 경로 검증
+- [x] 파일/AssetDatabase를 쓰는 테스트는 `[TearDown]`에서 생성물 정리
+  - **설계 변경 (원안 대비)**: Task 9 문서 §Q2는 `Detect`에 픽셀 버퍼 오버로드를 추가하자고 했으나, `Detect(string imagePath, bool, bool)`가 이미 public이고 **절대 경로를 그대로 처리**(`ResolveFullPath`)하므로 합성 시트 PNG를 시스템 임시 폴더에 쓰고 그 경로로 호출하는 방식을 택했다. 결과: **`SpriteSheetImporter.cs` 원본 무수정** → Task 8 C23/C24와의 충돌 위험 제거. `Detect`는 파일을 쓰지 않으므로 프로젝트에도 아무것도 남지 않는다(`ApplySlices`는 호출하지 않음).
+  - 구현 결과: 테스트 7파일 / 메서드 55개(NUnit 케이스 약 74). 합성 시트는 200×200, 50px 셀 4×4, 배경 순백, **격자선 242 무채색 3px**(내부 경계만 — 가장자리에 선을 두면 sliver 셀이 생겨 경계 정리 로직이 개입), 콘텐츠는 채도 190 빨강. 242를 고른 근거는 `GridLineMinChannel(150) < 242 < GridLineMaxChannel(248)`을 만족하면서 동시에 `NearWhiteThreshold(235)` 이상이라 외곽 BFS가 격자선을 넘어 셀 안쪽 배경까지 지운다는 점(중간 회색이면 BFS가 막혀 "비어 보임" 검증이 불가능). 배치는 행0 정상 4칸 / 행1 정상 3칸+작은 점 1칸 / 행2 정상 2칸 / 행3 공백.
+  - 기대값: `rows=3`(행3 탈락), 행별 셀 4/4/2, `TotalFrameCount=10`, `LooksEmptyFrameCount=1`, `IncludedRowCount=3`, 정상 셀 `contentRatio=0.16` / 작은 점 `0.01`(→ `looksEmpty`, `include=false`), `cellWidth=cellHeight=50`, rect 하단-좌 원점. `whiteBackground=false`면 rows=4·total=16·looksEmpty=0.
+  - 검증 상태: **Unity 미실행 — 컴파일·Test Runner 검증 대기**. 서브에이전트가 `Detect`의 전 파이프라인(외곽 BFS → fringe → RestorePockets → FeatherEdges → DetectGridBoundaries → RefineGridBoundaries → ClearGridLineBands → 셀 판정)을 소스 상수 그대로 Python으로 시뮬레이션해 위 기대값이 전부 일치함을 확인했다. 주 에이전트는 API 시그니처(`Detect(string,bool,bool)`·`SpriteSheetDetection.Pixels` internal·`ControllerPathForSheet`)와 `sourcePath == 입력 경로`(절대 경로는 `ResolveFullPath`가 그대로 반환), 로케일 테스트의 `SetUp`/`TearDown` 복원, `CultureInfo.InvariantCulture.Clone()`으로 ICU 비의존 처리한 점을 확인했다.
+  - **미확인 가정 3건**(Unity 실행 시 확인): PNG `EncodeToPNG`↔`LoadImage` 바이트 무손실 왕복, NUnit `Assert.AreEqual` 혼합 숫자 타입 오버로드 해석, `File.SetLastWriteTime` 기반 정렬 결정성.
+  - **주의**: `SpriteSheetImporter`의 판정 상수는 전부 `private const`라 테스트에서 참조할 수 없어 값을 복사하고 주석에 근거를 남겼다. Task 8이 상수를 바꾸면 테스트가 실패한다(의도된 감지) — 그때 **주석의 숫자도 함께 갱신**해야 한다.
+  - 관련 파일: `Tests/EditMode/*.cs`(7), `Tests/EditMode/MCPTools.Editor.Tests.asmdef`, `Editor/AssemblyInfo.cs`
 
 ### Q3. CI 워크플로
 
@@ -71,6 +78,11 @@
 ### 마무리
 
 - [ ] `CHANGELOG.md` `[Unreleased]`에 기록 (Task 10과 같은 파일 — 충돌 시 두 항목 모두 유지)
+
+### 커밋 보류 중 (Unity 필요)
+
+- [ ] **Unity 에디터를 한 번 열어 `Tests/EditMode/**`·`Editor/AssemblyInfo.cs`의 `.meta` 생성** — 생성 전에는 커밋하지 않는다. `.meta` 없이 커밋하면 사용자 프로젝트에서 GUID가 새로 생성돼 asmdef 참조가 깨지고(릴리스절차 §커밋 전 점검), Q3에서 만든 CI의 `.meta` 검사도 실패한다
+- [ ] 컴파일 오류 0 확인 후 커밋
 
 ## 2. 에디터 테스트 체크리스트
 
