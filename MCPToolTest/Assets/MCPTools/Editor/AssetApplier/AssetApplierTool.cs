@@ -21,8 +21,9 @@ namespace MCPTools.Editor
                 "mcptools_apply_asset",
                 "4단계 적용: AssetList 항목 1개의 확정본을 대상 프리팹(또는 targetScenePath 지정 시 씬 직접 배치 오브젝트)의 " +
                 "컴포넌트(Image.sprite/RawImage.texture/SpriteRenderer.sprite/AudioSource.clip)에 적용합니다. " +
-                "오디오 항목에 targetComponent(컴포넌트 타입 이름)+targetField(직렬화 필드 경로)가 지정되어 있으면 " +
-                "AudioSource 대신 해당 컴포넌트의 직렬화된 AudioClip 필드에 적용합니다. " +
+                "항목에 targetComponent(컴포넌트 타입 이름)+targetField(직렬화 필드 경로, 배열 원소는 " +
+                "\"필드명.Array.data[i]\")가 지정되어 있으면 기본 컴포넌트 대신 해당 컴포넌트의 직렬화 필드에 적용합니다 " +
+                "(이미지 항목=Sprite 필드, 오디오 항목=AudioClip 필드). " +
                 "항목에 animatorControllerPath가 있으면(또는 파라미터로 넘기면) 프리팹 루트에 Animator를 붙이고 " +
                 "그 컨트롤러를 함께 연결합니다(씬 항목은 미지원). " +
                 "파라미터: assetListPath(필수, Assets/ 상대 AssetList JSON), assetItemId(필수), " +

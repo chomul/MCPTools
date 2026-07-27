@@ -16,7 +16,9 @@ namespace MCPTools.Editor
         {
             McpToolRegistry.Register(
                 "mcptools_asset_scan",
-                "1단계 에셋 리스트업의 분석 입력을 수집합니다. 기획서 원문과 프리팹 슬롯 스캔 결과, " +
+                "1단계 에셋 리스트업의 분석 입력을 수집합니다. 기획서 원문과 프리팹 슬롯 스캔 결과" +
+                "(Image/RawImage/SpriteRenderer/AudioSource 슬롯 + 커스텀 스크립트의 직렬화 Sprite/AudioClip " +
+                "필드 슬롯 — fieldPath/fieldAssetType이 채워짐), " +
                 "항목 스키마(itemSchema)와 작성 지침(instructions)을 반환하며, AI가 이를 분석해 목록을 만든 뒤 " +
                 "mcptools_asset_list_save로 저장합니다. " +
                 "파라미터: designDocPath(선택, Assets/ 상대 .md/.txt), scanRootPath(기본 \"Assets\"), " +

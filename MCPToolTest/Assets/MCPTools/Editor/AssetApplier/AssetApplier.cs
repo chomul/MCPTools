@@ -38,7 +38,8 @@ namespace MCPTools.Editor
     /// <summary>
     /// 4단계 AssetApplier의 실제 적용 로직입니다. 확정된 생성물을 AssetList 항목에 기록된
     /// 대상 프리팹의 컴포넌트(Image.sprite / RawImage.texture / SpriteRenderer.sprite / AudioSource.clip,
-    /// 오디오 항목은 targetComponent+targetField 지정 시 임의 컴포넌트의 직렬화 AudioClip 필드)에
+    /// targetComponent+targetField 지정 시 임의 컴포넌트의 직렬화 필드 — 이미지 항목은 Sprite 필드,
+    /// 오디오 항목은 AudioClip 필드, 배열 원소 경로 "필드명.Array.data[i]" 지원)에
     /// 할당하고 프리팹 에셋 자체를 저장합니다.
     ///
     /// [Undo 방식 선택 근거]
@@ -176,6 +177,7 @@ namespace MCPTools.Editor
         /// <summary>
         /// 항목의 대상 컴포넌트 종류 이름을 판정합니다.
         /// audio → AudioSource(단, targetComponent 지정 시 해당 컴포넌트 타입 이름),
+        /// 임의 필드 대상(targetComponent+targetField) → 해당 컴포넌트 타입 이름,
         /// UI(isUI/assetType=="ui") → Image 또는 RawImage(프리팹의 실제 컴포넌트 기준),
         /// 그 외 이미지 → SpriteRenderer.
         /// </summary>
@@ -188,6 +190,12 @@ namespace MCPTools.Editor
                 return string.IsNullOrEmpty(item.targetComponent)
                     ? new[] { "AudioSource" }
                     : new[] { item.targetComponent };
+            }
+
+            // 이미지/UI 항목도 임의 컴포넌트의 직렬화 Sprite 필드를 대상으로 지정할 수 있다.
+            if (item.HasCustomFieldTarget)
+            {
+                return new[] { item.targetComponent };
             }
 
             if (item.IsUI || item.assetType == "ui")
@@ -235,12 +243,11 @@ namespace MCPTools.Editor
                 return reasons;
             }
 
-            // 오디오 임의 필드 대상: targetComponent/targetField는 반드시 함께 지정해야 한다.
-            if (item.assetType == "audio"
-                && string.IsNullOrEmpty(item.targetComponent) != string.IsNullOrEmpty(item.targetField))
+            // 임의 필드 대상: targetComponent/targetField는 반드시 함께 지정해야 한다 (이미지/오디오 공통).
+            if (string.IsNullOrEmpty(item.targetComponent) != string.IsNullOrEmpty(item.targetField))
             {
                 reasons.Add(
-                    "오디오 임의 필드 적용은 targetComponent(컴포넌트 타입 이름)와 targetField(직렬화 필드 경로)를 " +
+                    "임의 컴포넌트 필드 적용은 targetComponent(컴포넌트 타입 이름)와 targetField(직렬화 필드 경로)를 " +
                     "모두 지정해야 합니다. 1단계 목록을 확인해주세요.");
             }
 
@@ -316,10 +323,10 @@ namespace MCPTools.Editor
                 AddPrefabStageConflictReason(item.targetPrefabPath, reasons);
             }
 
-            // 오디오 임의 필드 대상: 컴포넌트를 찾은 경우 직렬화 필드 존재·타입을 검증한다.
-            if (component != null && item.HasCustomAudioTarget)
+            // 임의 필드 대상: 컴포넌트를 찾은 경우 직렬화 필드 존재·타입을 검증한다 (이미지=Sprite, 오디오=AudioClip).
+            if (component != null && item.HasCustomFieldTarget)
             {
-                ValidateAudioField(component, item.targetField, reasons);
+                ValidateFieldTarget(component, item, reasons);
             }
 
             // 적용 에셋 존재·임포트 타입
@@ -1027,11 +1034,18 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
-        /// 오디오 임의 필드 대상의 직렬화 필드가 존재하고 AudioClip을 받을 수 있는
-        /// ObjectReference인지 검증해 실패 사유를 reasons에 추가합니다.
+        /// 임의 필드 대상의 직렬화 필드가 존재하고 항목 종류에 맞는 에셋
+        /// (오디오 항목=AudioClip, 그 외=Sprite)을 받을 수 있는 ObjectReference인지 검증해
+        /// 실패 사유를 reasons에 추가합니다. 필드 타입과 에셋 타입이 어긋나면
+        /// (예: audio 항목인데 Sprite 필드) 실제 타입을 담아 안내합니다.
         /// </summary>
-        private static void ValidateAudioField(Component component, string fieldPath, List<string> reasons)
+        private static void ValidateFieldTarget(Component component, AssetListItem item, List<string> reasons)
         {
+            string fieldPath = item.targetField;
+            bool isAudio = item.assetType == "audio";
+            string expectedType = isAudio ? "PPtr<$AudioClip>" : "PPtr<$Sprite>";
+            string expectedLabel = isAudio ? "AudioClip" : "Sprite";
+
             // SerializedObject는 네이티브 메모리를 잡으므로 반드시 해제한다 (M1).
             using (var serialized = new SerializedObject(component))
             {
@@ -1040,15 +1054,16 @@ namespace MCPTools.Editor
                 {
                     reasons.Add(
                         $"컴포넌트 \"{component.GetType().Name}\"에서 직렬화 필드 \"{fieldPath}\"를 찾을 수 없습니다. " +
-                        "필드 이름(SerializedProperty 경로)과 [SerializeField]/public 여부를 확인해주세요.");
+                        "필드 이름(SerializedProperty 경로)과 [SerializeField]/public 여부를 확인해주세요. " +
+                        "배열 원소는 \"필드명.Array.data[인덱스]\" 형식이며, 인덱스가 현재 배열 크기를 벗어나면 찾을 수 없습니다.");
                     return;
                 }
 
                 if (property.propertyType != SerializedPropertyType.ObjectReference
-                    || (property.type != "PPtr<$AudioClip>" && property.type != "PPtr<$Object>"))
+                    || (property.type != expectedType && property.type != "PPtr<$Object>"))
                 {
                     reasons.Add(
-                        $"컴포넌트 \"{component.GetType().Name}\"의 필드 \"{fieldPath}\"는 AudioClip 참조 필드가 아닙니다 " +
+                        $"컴포넌트 \"{component.GetType().Name}\"의 필드 \"{fieldPath}\"는 {expectedLabel} 참조 필드가 아닙니다 " +
                         $"(실제 타입: {property.type}).");
                 }
             }
@@ -1186,16 +1201,22 @@ namespace MCPTools.Editor
 
         /// <summary>
         /// 컴포넌트 종류에 맞게 에셋을 할당합니다 (Undo.RecordObject 등록 포함, 프리팹/씬 공용).
-        /// 오디오 임의 필드 대상(targetComponent+targetField)은 해당 직렬화 필드에 AudioClip을 할당합니다.
-        /// 항목에 spriteName이 지정된 경우 Image/SpriteRenderer에는 시트 안의 해당 서브 스프라이트를 할당합니다.
+        /// 임의 필드 대상(targetComponent+targetField)은 해당 직렬화 필드에
+        /// 오디오 항목이면 AudioClip을, 그 외에는 Sprite를 할당합니다 (배열 원소 경로 지원).
+        /// 항목에 spriteName이 지정된 경우 Image/SpriteRenderer와 임의 Sprite 필드에는
+        /// 시트 안의 해당 서브 스프라이트를 할당합니다.
         /// </summary>
         private static void AssignAsset(Component component, string assetPath, AssetListItem item)
         {
             Undo.RecordObject(component, $"MCPTools 에셋 적용 ({item.id})");
 
-            if (item.HasCustomAudioTarget)
+            if (item.HasCustomFieldTarget)
             {
-                SetObjectProperty(component, item.targetField, AssetDatabase.LoadAssetAtPath<AudioClip>(assetPath));
+                // 스프라이트 해석은 컴포넌트 적용과 같은 규칙(ResolveSprite — spriteName/시트 첫 프레임)을 쓴다.
+                UnityEngine.Object value = item.assetType == "audio"
+                    ? (UnityEngine.Object)AssetDatabase.LoadAssetAtPath<AudioClip>(assetPath)
+                    : ResolveSprite(assetPath, item);
+                SetObjectProperty(component, item.targetField, value);
                 EditorUtility.SetDirty(component);
                 return;
             }
@@ -1254,7 +1275,7 @@ namespace MCPTools.Editor
                 return null;
             }
 
-            if (item.HasCustomAudioTarget)
+            if (item.HasCustomFieldTarget)
             {
                 return GetObjectProperty(component, item.targetField);
             }

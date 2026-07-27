@@ -30,6 +30,37 @@ namespace MCPTools.Editor
 
         /// <summary>UI 컴포넌트(Image/RawImage) 여부입니다.</summary>
         public bool isUI;
+
+        /// <summary>
+        /// 커스텀 스크립트 직렬화 필드 슬롯의 SerializedProperty 경로입니다
+        /// (예: 단일 필드 "portrait", 배열 원소 "roleSprites.Array.data[2]").
+        /// 컴포넌트 슬롯(Image/RawImage/SpriteRenderer/AudioSource)이면 빈 문자열입니다.
+        /// 필드 슬롯에서는 <see cref="componentType"/>이 커스텀 스크립트 클래스 이름이 됩니다.
+        /// </summary>
+        public string fieldPath = string.Empty;
+
+        /// <summary>필드 슬롯이 참조하는 에셋 종류: "Sprite" / "AudioClip". 컴포넌트 슬롯이면 빈 문자열.</summary>
+        public string fieldAssetType = string.Empty;
+
+        /// <summary>커스텀 스크립트 직렬화 필드 슬롯인지 여부입니다.</summary>
+        public bool IsFieldSlot
+        {
+            get { return !string.IsNullOrEmpty(fieldPath); }
+        }
+
+        /// <summary>
+        /// 필드 슬롯의 사람이 읽기 쉬운 표시 이름입니다 (예: "OSBodySegmentView.roleSprites[2]").
+        /// 컴포넌트 슬롯이면 빈 문자열.
+        /// </summary>
+        public string FieldDisplayName
+        {
+            get
+            {
+                return string.IsNullOrEmpty(fieldPath)
+                    ? string.Empty
+                    : componentType + "." + fieldPath.Replace(".Array.data[", "[");
+            }
+        }
     }
 
     /// <summary>
@@ -37,6 +68,9 @@ namespace MCPTools.Editor
     /// uGUI(<c>com.unity.ugui</c>) 어셈블리를 참조하지 않고 컴포넌트 타입 이름과 SerializedProperty로
     /// Image/RawImage를 다루므로, uGUI가 설치되지 않은 프로젝트에서도 컴파일·동작합니다
     /// (그런 프로젝트에서는 Image/RawImage 슬롯이 존재하지 않으므로 수집되지 않을 뿐입니다).
+    /// 4종 컴포넌트 슬롯에 더해, 사용자 커스텀 MonoBehaviour의 직렬화 Sprite/AudioClip 필드
+    /// (단일 필드와 배열/List 원소)도 필드 슬롯으로 수집합니다 — 런타임에 스크립트가
+    /// SpriteRenderer.sprite 등에 꽂아주는 패턴(예: <c>Sprite[] roleSprites</c>)을 지원하기 위함입니다.
     /// </summary>
     public static class ProjectScanner
     {
@@ -45,6 +79,12 @@ namespace MCPTools.Editor
 
         /// <summary>uGUI RawImage의 Texture 참조 직렬화 필드 이름입니다.</summary>
         private const string RawImageTextureProperty = "m_Texture";
+
+        /// <summary>
+        /// 필드 슬롯으로 수집할 배열/List 하나당 최대 원소 수입니다.
+        /// 거대한 배열(예: 전체 아이템 아이콘 테이블)이 목록을 폭주시키는 것을 막습니다.
+        /// </summary>
+        private const int MaxFieldArrayElements = 16;
 
         /// <summary>
         /// 수집 대상 컴포넌트 종류입니다. 한 컴포넌트가 여러 종류에 동시에 해당할 수 있으므로
@@ -69,6 +109,11 @@ namespace MCPTools.Editor
         private static readonly Dictionary<Type, SlotKind> SlotKindCache = new Dictionary<Type, SlotKind>();
 
         /// <summary>
+        /// "사용자 커스텀 MonoBehaviour" 판정 결과 캐시입니다 (<see cref="SlotKindCache"/>와 같은 이유로 타입당 1회만 계산).
+        /// </summary>
+        private static readonly Dictionary<Type, bool> CustomBehaviourCache = new Dictionary<Type, bool>();
+
+        /// <summary>
         /// 계층을 1회만 순회하면서도 슬롯 순서를 기존(Image 전체 → RawImage 전체 → SpriteRenderer 전체
         /// → AudioSource 전체)과 동일하게 유지하기 위한 종류별 임시 버퍼입니다.
         /// 스캔은 메인 스레드에서 순차 실행되고 재진입이 없으므로 할당을 줄이기 위해 재사용합니다.
@@ -80,6 +125,12 @@ namespace MCPTools.Editor
 
         /// <inheritdoc cref="RawImageBuffer"/>
         private static readonly List<ScanEntry> AudioSourceBuffer = new List<ScanEntry>();
+
+        /// <summary>
+        /// 커스텀 스크립트 직렬화 필드 슬롯의 임시 버퍼입니다. 기존 4종 슬롯 순서를 그대로 유지하기 위해
+        /// 필드 슬롯은 항상 <b>기존 슬롯들 뒤에</b> 이어붙입니다 (1단계 항목 순서·자동 id가 순서에 의존).
+        /// </summary>
+        private static readonly List<ScanEntry> FieldSlotBuffer = new List<ScanEntry>();
 
         /// <summary>
         /// rootPath 아래의 모든 프리팹에서 Image/RawImage/SpriteRenderer/AudioSource 슬롯을 수집합니다.
@@ -295,6 +346,8 @@ namespace MCPTools.Editor
         /// 순회는 1회지만, 결과는 종류별 임시 버퍼를 거쳐 <b>Image → RawImage → SpriteRenderer → AudioSource</b>
         /// 순으로 이어붙이므로 슬롯 순서·내용이 개선 전과 완전히 동일합니다
         /// (1단계 목록 항목 순서와 자동 부여 id가 이 순서에 의존합니다).
+        /// 커스텀 스크립트의 직렬화 Sprite/AudioClip 필드 슬롯은 같은 순회에서 수집하되
+        /// 항상 위 4종 슬롯들 <b>뒤에</b> 이어붙여 기존 순서를 바꾸지 않습니다.
         /// </summary>
         /// <param name="root">순회 시작 오브젝트 (프리팹 루트 또는 씬 루트 오브젝트).</param>
         /// <param name="assetPath">프리팹 경로 또는 씬 경로 (Assets/ 기준 상대 경로).</param>
@@ -310,6 +363,7 @@ namespace MCPTools.Editor
             RawImageBuffer.Clear();
             SpriteRendererBuffer.Clear();
             AudioSourceBuffer.Clear();
+            FieldSlotBuffer.Clear();
 
             foreach (Component component in root.GetComponentsInChildren<Component>(true))
             {
@@ -319,7 +373,10 @@ namespace MCPTools.Editor
                 }
 
                 SlotKind kind = GetSlotKind(component.GetType());
-                if (kind == SlotKind.None)
+
+                // 4종 슬롯에 해당하지 않는 커스텀 MonoBehaviour는 직렬화 Sprite/AudioClip 필드를 필드 슬롯으로 수집한다.
+                bool collectFields = kind == SlotKind.None && IsCustomBehaviourType(component.GetType());
+                if (kind == SlotKind.None && !collectFields)
                 {
                     continue;
                 }
@@ -331,6 +388,12 @@ namespace MCPTools.Editor
                 }
 
                 string objectPath = GetHierarchyPath(component.transform, pathRoot);
+
+                if (collectFields)
+                {
+                    CollectFieldSlots(component, prefabPath, scenePath, objectPath, FieldSlotBuffer);
+                    continue;
+                }
 
                 // Image는 기존 순서상 항상 가장 먼저이므로 버퍼를 거치지 않고 바로 담는다.
                 if ((kind & SlotKind.Image) != 0)
@@ -363,6 +426,125 @@ namespace MCPTools.Editor
             results.AddRange(RawImageBuffer);
             results.AddRange(SpriteRendererBuffer);
             results.AddRange(AudioSourceBuffer);
+            results.AddRange(FieldSlotBuffer); // 필드 슬롯은 항상 기존 4종 슬롯 뒤에 온다.
+        }
+
+        /// <summary>
+        /// 타입이 "사용자 커스텀 MonoBehaviour"인지 판정합니다 (타입당 1회만 계산해 캐시).
+        /// 실용적 판정으로, MonoBehaviour 파생이면서 네임스페이스가 UnityEngine/UnityEditor로 시작하지 않고
+        /// 어셈블리 이름도 Unity 내장/패키지(<c>UnityEngine.*</c>/<c>UnityEditor.*</c>/<c>Unity.*</c>)가 아니면
+        /// 커스텀으로 봅니다 (네임스페이스가 없는 사용자 스크립트도 커스텀으로 인정).
+        /// </summary>
+        private static bool IsCustomBehaviourType(Type type)
+        {
+            bool cached;
+            if (CustomBehaviourCache.TryGetValue(type, out cached))
+            {
+                return cached;
+            }
+
+            bool custom = typeof(MonoBehaviour).IsAssignableFrom(type);
+            if (custom)
+            {
+                string ns = type.Namespace ?? string.Empty;
+                string assemblyName = type.Assembly.GetName().Name ?? string.Empty;
+                if (ns.StartsWith("UnityEngine", StringComparison.Ordinal)
+                    || ns.StartsWith("UnityEditor", StringComparison.Ordinal)
+                    || assemblyName.StartsWith("UnityEngine", StringComparison.Ordinal)
+                    || assemblyName.StartsWith("UnityEditor", StringComparison.Ordinal)
+                    || assemblyName.StartsWith("Unity.", StringComparison.Ordinal))
+                {
+                    custom = false;
+                }
+            }
+
+            CustomBehaviourCache[type] = custom;
+            return custom;
+        }
+
+        /// <summary>
+        /// 커스텀 MonoBehaviour의 SerializedObject를 열어 직렬화 Sprite/AudioClip 필드를 필드 슬롯으로 수집합니다.
+        /// 최상위 직렬화 필드만 순회하며(<c>NextVisible</c> 자식 미진입), 대상은 다음 두 형태입니다:
+        /// <list type="bullet">
+        /// <item>단일 ObjectReference 필드 — <c>property.type</c>이 <c>PPtr&lt;$Sprite&gt;</c>/<c>PPtr&lt;$AudioClip&gt;</c>
+        /// (null 참조여도 type 문자열로 판정 가능)</item>
+        /// <item>배열/List — <c>arrayElementType</c>이 위와 같으면 원소별로 항목 생성
+        /// (폭주 방지로 배열당 최대 <see cref="MaxFieldArrayElements"/>개)</item>
+        /// </list>
+        /// SerializedObject는 네이티브 메모리를 잡으므로 반드시 사용 후 해제한다.
+        /// </summary>
+        private static void CollectFieldSlots(
+            Component component, string prefabPath, string scenePath, string objectPath, List<ScanEntry> buffer)
+        {
+            using (var serialized = new SerializedObject(component))
+            {
+                SerializedProperty property = serialized.GetIterator();
+                for (bool enterChildren = true; property.NextVisible(enterChildren); enterChildren = false)
+                {
+                    if (property.propertyType == SerializedPropertyType.ObjectReference)
+                    {
+                        string kind = FieldAssetKind(property.type);
+                        if (kind != null)
+                        {
+                            buffer.Add(MakeFieldEntry(prefabPath, scenePath, objectPath, component, property, kind));
+                        }
+
+                        continue;
+                    }
+
+                    // 문자열도 isArray가 true이므로 Generic(실제 배열/List)인 경우만 본다.
+                    if (!property.isArray || property.propertyType != SerializedPropertyType.Generic)
+                    {
+                        continue;
+                    }
+
+                    string elementKind = FieldAssetKind(property.arrayElementType);
+                    if (elementKind == null)
+                    {
+                        continue;
+                    }
+
+                    int count = Math.Min(property.arraySize, MaxFieldArrayElements);
+                    for (int i = 0; i < count; i++)
+                    {
+                        SerializedProperty element = property.GetArrayElementAtIndex(i);
+                        buffer.Add(MakeFieldEntry(prefabPath, scenePath, objectPath, component, element, elementKind));
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// SerializedProperty 타입 문자열(<c>PPtr&lt;$...&gt;</c>)을 필드 슬롯 에셋 종류로 변환합니다.
+        /// 수집 대상이 아니면 null (Texture/Texture2D는 이번 범위에서 제외).
+        /// </summary>
+        private static string FieldAssetKind(string propertyType)
+        {
+            switch (propertyType)
+            {
+                case "PPtr<$Sprite>": return "Sprite";
+                case "PPtr<$AudioClip>": return "AudioClip";
+                default: return null;
+            }
+        }
+
+        /// <summary>필드 슬롯 1개의 <see cref="ScanEntry"/>를 만듭니다 (componentType = 커스텀 스크립트 클래스 이름).</summary>
+        private static ScanEntry MakeFieldEntry(
+            string prefabPath, string scenePath, string objectPath,
+            Component component, SerializedProperty property, string fieldAssetType)
+        {
+            UnityEngine.Object value = property.objectReferenceValue;
+            return new ScanEntry
+            {
+                prefabPath = prefabPath,
+                scenePath = scenePath,
+                objectPath = objectPath,
+                componentType = component.GetType().Name,
+                currentAssetName = value != null ? value.name : string.Empty,
+                isUI = false,
+                fieldPath = property.propertyPath,
+                fieldAssetType = fieldAssetType
+            };
         }
 
         /// <summary>

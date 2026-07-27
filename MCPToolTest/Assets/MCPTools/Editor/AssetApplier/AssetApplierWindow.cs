@@ -312,14 +312,20 @@ namespace MCPTools.Editor
                     DrawSpriteSourceFields(item);
                 }
 
-                if (item.assetType == "audio")
+                // 오디오 항목은 항상, 그 외 항목은 임의 필드 대상 값이 있을 때 표시한다
+                // (스캔된 커스텀 스크립트 Sprite 필드 항목도 여기서 확인·수정할 수 있게 하되,
+                //  일반 이미지 항목의 UI는 종전과 동일하게 유지).
+                if (item.assetType == "audio"
+                    || !string.IsNullOrEmpty(item.targetComponent)
+                    || !string.IsNullOrEmpty(item.targetField))
                 {
                     item.targetComponent = EditorGUILayout.TextField(
-                        new GUIContent("대상 컴포넌트", "(선택) AudioSource.clip 대신 적용할 컴포넌트 타입 이름 (예: PlayerController). " +
-                                                    "대상 필드와 함께 지정해야 합니다."),
+                        new GUIContent("대상 컴포넌트", "(선택) 기본 컴포넌트 대신 적용할 컴포넌트(스크립트) 타입 이름 " +
+                                                    "(예: PlayerController). 대상 필드와 함께 지정해야 합니다."),
                         item.targetComponent);
                     item.targetField = EditorGUILayout.TextField(
-                        new GUIContent("대상 필드", "(선택) 위 컴포넌트의 직렬화 AudioClip 필드 경로 (예: jumpSound)."),
+                        new GUIContent("대상 필드", "(선택) 위 컴포넌트의 직렬화 필드 경로 — 오디오 항목은 AudioClip 필드(예: jumpSound), " +
+                                                 "이미지 항목은 Sprite 필드. 배열 원소는 \"필드명.Array.data[인덱스]\" 형식."),
                         item.targetField);
                 }
 

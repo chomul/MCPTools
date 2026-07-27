@@ -61,6 +61,17 @@ namespace MCPTools.Editor
                     {
                         item.assetType = "audio";
                     }
+
+                    // 커스텀 스크립트 필드 슬롯과 매칭된 경우, 적용이 해당 직렬화 필드로 가도록 함께 기록한다.
+                    if (match.IsFieldSlot)
+                    {
+                        item.targetComponent = match.componentType;
+                        item.targetField = match.fieldPath;
+                        if (match.fieldAssetType == "AudioClip")
+                        {
+                            item.assetType = "audio";
+                        }
+                    }
                 }
 
                 doc.items.Add(item);
@@ -119,16 +130,37 @@ namespace MCPTools.Editor
             return doc;
         }
 
-        /// <summary>스캔 슬롯 1개를 대상 정보가 채워진 목록 항목으로 변환합니다.</summary>
+        /// <summary>
+        /// 스캔 슬롯 1개를 대상 정보가 채워진 목록 항목으로 변환합니다.
+        /// 커스텀 스크립트 필드 슬롯은 이름을 "스크립트명.필드명[i]" 말단 형태로 만들고
+        /// targetComponent/targetField를 함께 기록합니다 (Sprite 필드 → "image"/UI 아님, AudioClip 필드 → "audio").
+        /// </summary>
         private static AssetListItem ItemFromScanEntry(ScanEntry entry)
         {
+            string currentSuffix = string.IsNullOrEmpty(entry.currentAssetName)
+                ? " (현재 비어 있음)"
+                : $" (현재: {entry.currentAssetName})";
+
+            if (entry.IsFieldSlot)
+            {
+                return new AssetListItem
+                {
+                    name = entry.FieldDisplayName,
+                    description = $"스캔됨: {entry.componentType} 스크립트 필드" + currentSuffix,
+                    assetType = entry.fieldAssetType == "AudioClip" ? "audio" : "image",
+                    targetPrefabPath = entry.prefabPath,
+                    targetScenePath = entry.scenePath,
+                    targetObjectPath = entry.objectPath,
+                    targetComponent = entry.componentType,
+                    targetField = entry.fieldPath,
+                    uiFlag = 0
+                };
+            }
+
             return new AssetListItem
             {
                 name = LeafName(entry.objectPath),
-                description = $"스캔됨: {entry.componentType} 슬롯" +
-                              (string.IsNullOrEmpty(entry.currentAssetName)
-                                  ? " (현재 비어 있음)"
-                                  : $" (현재: {entry.currentAssetName})"),
+                description = $"스캔됨: {entry.componentType} 슬롯" + currentSuffix,
                 assetType = entry.componentType == "AudioSource" ? "audio" : (entry.isUI ? "ui" : "image"),
                 targetPrefabPath = entry.prefabPath,
                 targetScenePath = entry.scenePath,

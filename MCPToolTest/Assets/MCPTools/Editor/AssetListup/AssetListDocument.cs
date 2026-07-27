@@ -38,14 +38,16 @@ namespace MCPTools.Editor
         public string targetObjectPath = string.Empty;
 
         /// <summary>
-        /// (선택, 오디오 항목 전용) 적용 대상 컴포넌트 타입 이름 (예: "PlayerController").
-        /// <see cref="targetField"/>와 함께 지정하면 AudioSource.clip 대신 해당 컴포넌트의
-        /// 직렬화된 AudioClip 필드에 적용합니다. 비어 있으면 기존 AudioSource.clip 동작.
+        /// (선택) 적용 대상 컴포넌트(스크립트) 타입 이름 (예: "PlayerController", "OSBodySegmentView").
+        /// <see cref="targetField"/>와 함께 지정하면 기본 컴포넌트(Image/SpriteRenderer/AudioSource 등) 대신
+        /// 해당 컴포넌트의 직렬화 필드에 적용합니다 — 이미지 항목은 Sprite 필드, 오디오 항목은 AudioClip 필드.
+        /// 비어 있으면 기존 컴포넌트 적용 동작.
         /// </summary>
         public string targetComponent = string.Empty;
 
         /// <summary>
-        /// (선택, 오디오 항목 전용) 적용 대상 직렬화 필드 경로 (예: "jumpSound").
+        /// (선택) 적용 대상 직렬화 필드의 SerializedProperty 경로
+        /// (예: 단일 필드 "jumpSound", 배열 원소 "roleSprites.Array.data[2]").
         /// <see cref="targetComponent"/>와 함께 지정해야 합니다.
         /// </summary>
         public string targetField = string.Empty;
@@ -71,17 +73,26 @@ namespace MCPTools.Editor
         public string animatorControllerPath = string.Empty;
 
         /// <summary>
-        /// 오디오 항목이 임의 컴포넌트의 AudioClip 필드를 대상으로 지정했는지 여부입니다
-        /// (targetComponent와 targetField가 모두 지정된 경우).
+        /// 항목이 임의 컴포넌트의 직렬화 필드를 적용 대상으로 지정했는지 여부입니다
+        /// (targetComponent와 targetField가 모두 지정된 경우 — 이미지 항목은 Sprite 필드,
+        /// 오디오 항목은 AudioClip 필드에 적용).
         /// </summary>
-        public bool HasCustomAudioTarget
+        public bool HasCustomFieldTarget
         {
             get
             {
-                return assetType == "audio"
-                    && !string.IsNullOrEmpty(targetComponent)
+                return !string.IsNullOrEmpty(targetComponent)
                     && !string.IsNullOrEmpty(targetField);
             }
+        }
+
+        /// <summary>
+        /// 오디오 항목이 임의 컴포넌트의 AudioClip 필드를 대상으로 지정했는지 여부입니다
+        /// (<see cref="HasCustomFieldTarget"/>의 오디오 한정 판정 — 기존 호출부 호환용).
+        /// </summary>
+        public bool HasCustomAudioTarget
+        {
+            get { return assetType == "audio" && HasCustomFieldTarget; }
         }
 
         /// <summary>씬에 직접 배치된 오브젝트 대상 항목인지 여부입니다.</summary>

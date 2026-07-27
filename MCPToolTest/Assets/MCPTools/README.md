@@ -175,10 +175,12 @@ Assets/Generated/
 
 상단 토글 **[기획서에서 항목 추측해 추가 (끄면 스캔 항목만 · 기획서는 설명 참고용)]**(기본 **OFF**, EditorPrefs 유지)이 목록 생성 버튼의 동작을 결정합니다. 레이아웃은 바꾸지 않으며 모든 섹션이 항상 보입니다.
 
-- **OFF (기본)** — 항목은 **열린 씬의 슬롯 + 스캔 루트(기본 `Assets`) 아래 모든 프리팹의 슬롯을 항상 병합한 스캔 결과에서만** 만들어집니다(Image/RawImage/SpriteRenderer/AudioSource 슬롯, `targetPrefabPath`/`targetScenePath`/`targetObjectPath`·UI 여부가 채워짐). 열린 씬에 포함된 프리팹과 스캔 루트 프리팹이 겹치면 프리팹 단위로 한 번만 담기므로 같은 슬롯이 중복 생성되지 않으며, **씬이 비어 있어도** 스캔 루트의 프리팹으로 목록이 만들어집니다(하단 상태 메시지에 "열린 씬 슬롯 N개 + 프리팹 슬롯 M개 = 총 K개" 구성이 표시됩니다). 열린 씬과 스캔 루트 양쪽 모두에서 슬롯을 찾지 못한 경우에만 안내 다이얼로그가 뜹니다. 기획서는 새 항목을 추가하지 않고 각 스캔 항목의 **설명/용도(description)를 채우는 참고 자료**로만 쓰입니다. [선택한 AI로 목록 생성]을 누르면 AI가 스캔 항목 목록 + 기획서를 받아 항목을 그대로 두고 설명만 채워 반환하며, 선택한 기획서 경로는 문서 `designDocPath`에 기록됩니다. AI 없이 수동 [스캔 + 휴리스틱 추출]을 쓰면 스캔 항목만 만들어지고 설명은 수동으로 보완합니다. 기획서를 선택하지 않았거나 AI 도구를 `클립보드 복사만`으로 둔 경우에는 스캔 항목만 생성합니다.
+- **OFF (기본)** — 항목은 **열린 씬의 슬롯 + 스캔 루트(기본 `Assets`) 아래 모든 프리팹의 슬롯을 항상 병합한 스캔 결과에서만** 만들어집니다(Image/RawImage/SpriteRenderer/AudioSource 슬롯과 커스텀 스크립트의 직렬화 필드 슬롯 — 아래 "스크립트 직렬화 필드 스캔" 참조, `targetPrefabPath`/`targetScenePath`/`targetObjectPath`·UI 여부가 채워짐). 열린 씬에 포함된 프리팹과 스캔 루트 프리팹이 겹치면 프리팹 단위로 한 번만 담기므로 같은 슬롯이 중복 생성되지 않으며, **씬이 비어 있어도** 스캔 루트의 프리팹으로 목록이 만들어집니다(하단 상태 메시지에 "열린 씬 슬롯 N개 + 프리팹 슬롯 M개 = 총 K개" 구성이 표시됩니다). 열린 씬과 스캔 루트 양쪽 모두에서 슬롯을 찾지 못한 경우에만 안내 다이얼로그가 뜹니다. 기획서는 새 항목을 추가하지 않고 각 스캔 항목의 **설명/용도(description)를 채우는 참고 자료**로만 쓰입니다. [선택한 AI로 목록 생성]을 누르면 AI가 스캔 항목 목록 + 기획서를 받아 항목을 그대로 두고 설명만 채워 반환하며, 선택한 기획서 경로는 문서 `designDocPath`에 기록됩니다. AI 없이 수동 [스캔 + 휴리스틱 추출]을 쓰면 스캔 항목만 만들어지고 설명은 수동으로 보완합니다. 기획서를 선택하지 않았거나 AI 도구를 `클립보드 복사만`으로 둔 경우에는 스캔 항목만 생성합니다.
 - **ON** — 기획서를 읽어 **스캔에 없는 항목까지 추측해 추가**하는 기존 추출 방식(AI/휴리스틱)으로 동작합니다. [선택한 AI로 목록 생성]/[스캔 + 휴리스틱 추출] 모두 종전과 동일합니다.
 
 저장되지 않은 임시 씬은 스캔에서 제외됩니다.
+
+**스크립트 직렬화 필드 스캔**: 4종 컴포넌트 슬롯에 더해, **사용자 커스텀 MonoBehaviour의 직렬화 `Sprite`/`AudioClip` 필드**(단일 필드와 배열/`List` 원소, 배열당 최대 16개)도 슬롯으로 수집합니다 — 런타임에 스크립트가 `SpriteRenderer.sprite` 등에 꽂아주는 패턴(예: `[SerializeField] Sprite[] roleSprites`)을 지원하기 위함입니다. 필드 슬롯은 기존 슬롯들 **뒤에** 이어붙으며, 항목 이름은 `스크립트명.필드명[i]`(예: `OSBodySegmentView.roleSprites[2]`) 형태가 되고 `targetComponent`(스크립트 클래스 이름)/`targetField`(SerializedProperty 경로, 예: `roleSprites.Array.data[2]`)가 함께 기록됩니다. Sprite 필드는 `image`(UI 아님), AudioClip 필드는 `audio` 항목이 됩니다. Texture/Texture2D 필드는 수집하지 않습니다.
 
 ### 1) AI 연동 (주 흐름)
 
@@ -330,9 +332,9 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
    - **[선택 적용]은 이미 적용한 항목에도 항상 가능합니다.** 확정본을 다시 만들었거나 대상을 손으로 되돌린 경우 이쪽으로 다시 적용하세요.
    - 적용 기록과 프리팹의 실제 값이 어긋나 있어도(직접 값을 바꾼 경우) 도구는 **기록만 신뢰**합니다. 현재 값을 매번 읽어 비교하지 않습니다.
 
-적용 대상 컴포넌트 판정: 오디오 항목 → `AudioSource.clip`, UI 항목 → `Image.sprite` 또는 `RawImage.texture`(대상 오브젝트의 실제 컴포넌트 기준), 그 외 이미지 → `SpriteRenderer.sprite`. 적용 전 프리팹 존재·내부 오브젝트 경로·컴포넌트 존재·에셋 임포트 타입(Sprite/Texture2D/AudioClip)을 검증하고, 실패 항목은 사유와 함께 표시됩니다.
+적용 대상 컴포넌트 판정: 오디오 항목 → `AudioSource.clip`, UI 항목 → `Image.sprite` 또는 `RawImage.texture`(대상 오브젝트의 실제 컴포넌트 기준), 그 외 이미지 → `SpriteRenderer.sprite`. 항목에 `targetComponent`/`targetField`가 있으면 아래 "임의 컴포넌트 직렬화 필드 적용"이 우선합니다. 적용 전 프리팹 존재·내부 오브젝트 경로·컴포넌트 존재·에셋 임포트 타입(Sprite/Texture2D/AudioClip)을 검증하고, 실패 항목은 사유와 함께 표시됩니다.
 
-**오디오 임의 필드 적용**: 오디오 항목에 `targetComponent`(컴포넌트 타입 이름, 사용자 MonoBehaviour 포함)와 `targetField`(직렬화 필드 경로)를 함께 지정하면 `AudioSource.clip` 대신 해당 컴포넌트의 직렬화된 AudioClip 필드에 적용합니다 — 예: `[SerializeField] AudioClip jumpSound`를 코드에서 `PlayOneShot`으로 재생하는 경우. 적용 전 컴포넌트 존재, 필드 존재, 필드가 AudioClip을 받는 ObjectReference인지 검증하며, 미리보기의 "현재 값"도 해당 필드 값을 표시합니다. 두 필드가 없으면 기존 `AudioSource.clip` 동작이 그대로 유지됩니다.
+**임의 컴포넌트 직렬화 필드 적용**: 항목에 `targetComponent`(컴포넌트 타입 이름, 사용자 MonoBehaviour 포함)와 `targetField`(직렬화 필드의 SerializedProperty 경로)를 함께 지정하면 기본 컴포넌트 대신 해당 컴포넌트의 직렬화 필드에 적용합니다 — **오디오 항목은 AudioClip 필드**(예: `[SerializeField] AudioClip jumpSound`를 코드에서 `PlayOneShot`으로 재생하는 경우), **이미지 항목은 Sprite 필드**(예: `[SerializeField] Sprite[] roleSprites`를 런타임에 `SpriteRenderer.sprite`에 꽂는 경우 — 배열 원소는 `roleSprites.Array.data[2]` 형식)입니다. 1단계 스캔이 이런 필드 슬롯을 찾으면 두 값을 자동으로 채워줍니다. 적용 전 컴포넌트 존재, 필드 존재(배열 인덱스 범위 포함), 필드가 항목 종류에 맞는 에셋(Sprite/AudioClip)을 받는 ObjectReference인지 검증하며(불일치 시 실제 타입을 담아 안내), 미리보기의 "현재 값"도 해당 필드 값을 표시합니다. 이미지 항목은 `spriteName`/스프라이트 시트 지정도 컴포넌트 적용과 동일하게 지원합니다. 두 필드가 없으면 기존 컴포넌트 적용 동작이 그대로 유지됩니다.
 
 **프리팹 변종·중첩 프리팹**: 둘 다 그대로 지원합니다 (Unity 6000.5.2f1에서 확인).
 
@@ -426,7 +428,7 @@ AI(MCP 클라이언트)가 목록을 작성할 재료를 반환합니다. 항목
 - 반환 `data`:
   - `designDocPath`, `designDocText` — 기획서를 지정한 경우에만 포함 (원문 전체)
   - `scanRootPath`
-  - `scanEntries` — 슬롯 목록: `{ prefabPath, scenePath, objectPath, componentType, currentAssetName, isUI }[]` (Image/RawImage/SpriteRenderer/AudioSource 수집. `prefabPath`/`scenePath`는 상호 배타 — 씬 직접 배치 슬롯은 `scenePath`가 채워짐)
+  - `scanEntries` — 슬롯 목록: `{ prefabPath, scenePath, objectPath, componentType, currentAssetName, isUI, fieldPath, fieldAssetType, fieldDisplayName }[]` (Image/RawImage/SpriteRenderer/AudioSource 슬롯 + 커스텀 스크립트의 직렬화 Sprite/AudioClip 필드 슬롯 수집. `prefabPath`/`scenePath`는 상호 배타 — 씬 직접 배치 슬롯은 `scenePath`가 채워짐. 필드 슬롯은 `componentType`=스크립트 클래스 이름, `fieldPath`=SerializedProperty 경로(예: `roleSprites.Array.data[2]`), `fieldAssetType`=`"Sprite"`\|`"AudioClip"`, `fieldDisplayName`=`OSBodySegmentView.roleSprites[2]` 형태이며, 컴포넌트 슬롯은 이 세 필드가 빈 문자열. 매칭한 항목에는 `targetComponent`/`targetField`로 기록)
   - `itemSchema` — 항목 필드 스키마 (필드명 → 한국어 설명)
   - `instructions` — 목록 작성 지침 (MCP 클라이언트가 프로젝트 파일을 직접 읽을 수 있으면 스크립트·씬·프리팹을 참고해 역할을 추론하라는 안내 포함)
 
@@ -613,8 +615,8 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
 | `assetType` | `"image"` \| `"ui"` \| `"audio"` |
 | `targetPrefabPath` | 적용 대상 프리팹 경로 (Assets/ 상대). 빈 문자열이면 미지정 |
 | `targetObjectPath` | 프리팹 내부 GameObject 계층 경로 |
-| `targetComponent` | (선택, 오디오 전용) 적용 대상 컴포넌트 타입 이름 (예: `"PlayerController"`, 사용자 MonoBehaviour 가능). `targetField`와 함께 지정 시 AudioSource.clip 대신 해당 컴포넌트의 AudioClip 필드에 적용 |
-| `targetField` | (선택, 오디오 전용) 적용 대상 직렬화 필드 경로 (예: `"jumpSound"`). `targetComponent`와 반드시 함께 지정 |
+| `targetComponent` | (선택) 적용 대상 컴포넌트(스크립트) 타입 이름 (예: `"PlayerController"`, 사용자 MonoBehaviour 가능). `targetField`와 함께 지정 시 기본 컴포넌트 대신 해당 컴포넌트의 직렬화 필드에 적용 — 오디오 항목은 AudioClip 필드, 이미지 항목은 Sprite 필드 |
+| `targetField` | (선택) 적용 대상 직렬화 필드의 SerializedProperty 경로 (예: `"jumpSound"`, 배열 원소는 `"roleSprites.Array.data[2]"`). `targetComponent`와 반드시 함께 지정 |
 | `isUI` | UI 여부 (uGUI 요소면 true) |
 | `isUISpecified` | UI 여부가 실제로 지정되었는지 (false면 `isUI` 값 무시, 창에서는 "미지정") |
 | `status` | 항목 상태 메모 — **1단계에서 사람이 관리하는 자유 입력 열**입니다. `"pending"`(기본) / `"대상 미정"`(대상 미기록 상태로 저장됨) 등을 쓰며, 2~4단계 도구가 이 값을 자동으로 전진시키지 않습니다. 적용 여부는 아래 `applications` 기록으로 관리합니다 |

@@ -25,6 +25,10 @@ namespace MCPTools.Editor
                                      "씬에 직접 배치된 오브젝트 대상 항목이면 채우고, 이때 targetPrefabPath는 빈 문자열로 둡니다 (상호 배타)" },
                 { "targetObjectPath", "적용 대상 GameObject 계층 경로 (스캔 결과의 objectPath에서 선택. 없으면 빈 문자열. " +
                                       "프리팹 항목은 프리팹 루트 기준, 씬 항목은 씬 루트 오브젝트부터의 경로)" },
+                { "targetComponent", "(선택) 적용 대상 컴포넌트(스크립트) 타입 이름. 스캔 결과의 fieldPath가 채워진 슬롯과 " +
+                                     "매칭한 항목은 그 슬롯의 componentType을 그대로 기록 (targetField와 함께 지정)" },
+                { "targetField", "(선택) 적용 대상 직렬화 필드 경로. 스캔 결과의 fieldPath 값을 그대로 기록 " +
+                                 "(예: \"roleSprites.Array.data[2]\" — targetComponent와 함께 지정)" },
                 { "isUI", "UI 여부 (true/false). 판단 불가 시 필드를 생략하면 '미지정'으로 처리됨" },
                 { "status", "항목 상태 (선택, 기본 \"pending\")" }
             };
@@ -57,6 +61,9 @@ namespace MCPTools.Editor
                 "targetScenePath에 scenePath를, targetObjectPath에 objectPath를 기록하고 targetPrefabPath는 빈 문자열로 둡니다. " +
                 "prefabPath가 채워진 슬롯은 반대로 targetPrefabPath만 채웁니다 (두 필드는 상호 배타).\n" +
                 "4. Image/RawImage 슬롯은 isUI=true, SpriteRenderer는 isUI=false, AudioSource는 assetType=\"audio\"입니다.\n" +
+                "4-1. fieldPath가 채워진 슬롯은 커스텀 스크립트의 직렬화 필드입니다 (componentType=스크립트 클래스 이름). " +
+                "이런 슬롯과 매칭한 항목은 targetComponent에 componentType을, targetField에 fieldPath를 그대로 기록하고, " +
+                "fieldAssetType이 \"Sprite\"면 assetType=\"image\"/isUI=false, \"AudioClip\"이면 assetType=\"audio\"로 둡니다.\n" +
                 "5. description은 이후 생성 프롬프트 제작에 쓰이므로 기획서 맥락(용도, 분위기, 색감 등)을 담아 구체적으로 씁니다.\n" +
                 "6. 스캔 결과에 있으나 기획서에 언급되지 않은 슬롯도 필요해 보이면 항목으로 포함할 수 있습니다." +
                 extra;
@@ -83,7 +90,11 @@ namespace MCPTools.Editor
                     { "objectPath", entry.objectPath },
                     { "componentType", entry.componentType },
                     { "currentAssetName", entry.currentAssetName },
-                    { "isUI", entry.isUI }
+                    { "isUI", entry.isUI },
+                    // 커스텀 스크립트 직렬화 필드 슬롯 정보 (컴포넌트 슬롯이면 전부 빈 문자열).
+                    { "fieldPath", entry.fieldPath },
+                    { "fieldAssetType", entry.fieldAssetType },
+                    { "fieldDisplayName", entry.FieldDisplayName }
                 });
             }
 
@@ -145,11 +156,12 @@ namespace MCPTools.Editor
             }
             else
             {
-                sb.AppendLine("prefabPath | scenePath | objectPath | componentType | currentAssetName | isUI");
+                sb.AppendLine("prefabPath | scenePath | objectPath | componentType | fieldPath | fieldAssetType | currentAssetName | isUI");
                 foreach (ScanEntry entry in scanEntries)
                 {
                     sb.AppendLine(
                         $"{entry.prefabPath} | {entry.scenePath} | {entry.objectPath} | {entry.componentType} | " +
+                        $"{(entry.IsFieldSlot ? entry.fieldPath : "-")} | {(entry.IsFieldSlot ? entry.fieldAssetType : "-")} | " +
                         $"{(string.IsNullOrEmpty(entry.currentAssetName) ? "(비어 있음)" : entry.currentAssetName)} | {entry.isUI}");
                 }
             }
@@ -271,6 +283,9 @@ namespace MCPTools.Editor
                     targetPrefabPath = GetString(dict, "targetPrefabPath"),
                     targetScenePath = GetString(dict, "targetScenePath"),
                     targetObjectPath = GetString(dict, "targetObjectPath"),
+                    // 커스텀 스크립트 직렬화 필드 대상 (없으면 빈 문자열 — 기존 컴포넌트 적용 동작).
+                    targetComponent = GetString(dict, "targetComponent"),
+                    targetField = GetString(dict, "targetField"),
                     status = GetString(dict, "status", "pending")
                 };
 

@@ -244,7 +244,8 @@ namespace MCPTools.Editor
             if (entries.Count == 0)
             {
                 EditorUtility.DisplayDialog("에셋 리스트업",
-                    "스캔 가능한 슬롯(Image/RawImage/SpriteRenderer/AudioSource)을 찾지 못했습니다.\n" +
+                    "스캔 가능한 슬롯(Image/RawImage/SpriteRenderer/AudioSource, " +
+                    "커스텀 스크립트의 Sprite/AudioClip 직렬화 필드)을 찾지 못했습니다.\n" +
                     $"열려 있는 씬과 스캔 루트(\"{root}\")의 프리팹 어디에도 슬롯이 없습니다.\n" +
                     "슬롯이 있는 프리팹이 든 폴더로 스캔 루트를 바꾼 뒤 다시 실행해주세요. " +
                     "(저장되지 않은 임시 씬은 제외됩니다)", "확인");
