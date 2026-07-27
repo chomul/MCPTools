@@ -27,14 +27,14 @@
     { "nodeId": "5", "field": "steps", "label": "Steps", "type": "int", "default": 30, "min": 1, "max": 150, "description": "샘플링 반복 횟수입니다. 높을수록 품질이 좋아질 수 있지만 생성 시간이 비례해서 늘어납니다." },
     { "nodeId": "5", "field": "cfg", "label": "CFG", "type": "float", "default": 5.5, "min": 0.0, "max": 30.0, "description": "프롬프트 반영 강도입니다. 높을수록 프롬프트를 강하게 따르지만 과하면 이미지가 왜곡됩니다. 모델별 권장값을 사용하세요." },
     { "nodeId": "5", "field": "sampler_name", "label": "Sampler", "type": "string", "default": "euler", "description": "샘플링 알고리즘입니다 (예: euler, dpmpp_2m). 모델이 권장하는 샘플러를 사용하는 것이 안전합니다." },
-    { "nodeId": "6", "field": "width", "label": "Width", "type": "int", "default": 1024, "min": 64, "max": 4096, "description": "생성 이미지 가로 해상도(px)입니다. 64의 배수를 권장하며, 클수록 VRAM 사용량과 생성 시간이 늘어납니다." },
-    { "nodeId": "6", "field": "height", "label": "Height", "type": "int", "default": 2560, "min": 64, "max": 4096, "description": "생성 이미지 세로 해상도(px)입니다. 64의 배수를 권장하며, 클수록 VRAM 사용량과 생성 시간이 늘어납니다." }
+    { "nodeId": "6", "field": "width", "label": "Width", "type": "int", "default": 512, "min": 64, "max": 4096, "description": "생성 이미지 가로 해상도(px)입니다. 64의 배수를 권장하며, 클수록 VRAM 사용량과 생성 시간이 늘어납니다." },
+    { "nodeId": "6", "field": "height", "label": "Height", "type": "int", "default": 512, "min": 64, "max": 4096, "description": "생성 이미지 세로 해상도(px)입니다. 64의 배수를 권장하며, 클수록 VRAM 사용량과 생성 시간이 늘어납니다." }
   ],
   "UI": [
     { "nodeId": "22", "field": "value", "label": "참조 이미지 사용", "type": "bool", "default": true, "description": "켜면 참조 이미지의 스타일/구도를 반영해 생성합니다. 끄면 프롬프트만으로 생성합니다." },
     { "nodeId": "8", "field": "text", "label": "긍정 프롬프트", "type": "string", "role": "positive", "default": "make the small cute boy", "description": "생성할 UI 이미지를 묘사하는 프롬프트입니다. PromptSet 항목을 선택하면 자동으로 채워지며 직접 수정할 수 있습니다." },
     { "nodeId": "7", "field": "text", "label": "부정 프롬프트", "type": "string", "role": "negative", "default": "", "description": "이미지에서 배제할 요소를 나열합니다 (예: blurry, low quality, text)." },
-    { "nodeId": "17", "field": "image", "label": "참조 이미지", "type": "image", "default": "", "description": "스타일 참고용 이미지입니다. [파일 선택]으로 참조 이미지를 지정해야 합니다 (지정하면 생성 시 자동 업로드됩니다). 워크플로가 이 이미지를 항상 로드하므로 '참조 이미지 사용'을 꺼도 지정은 필요합니다." },
+    { "nodeId": "17", "field": "image", "label": "참조 이미지", "type": "image", "default": "", "description": "스타일 참고용 이미지입니다. [파일 선택]으로 참조 이미지를 지정하면 생성 시 자동 업로드됩니다. '참조 이미지 사용'이 꺼져 있으면 지정하지 않아도 됩니다 (미사용 분기는 생성 시 자동 제거됩니다).", "visibleWhen": [{ "nodeId": "22", "field": "value", "equals": true }] },
     { "nodeId": "16", "field": "width", "label": "Width", "type": "int", "default": 512, "min": 64, "max": 4096, "description": "생성 이미지 가로 해상도(px)입니다. 64의 배수를 권장합니다." },
     { "nodeId": "16", "field": "height", "label": "Height", "type": "int", "default": 512, "min": 64, "max": 4096, "description": "생성 이미지 세로 해상도(px)입니다. 64의 배수를 권장합니다." },
     { "nodeId": "5", "field": "steps", "label": "Steps", "type": "int", "default": 4, "min": 1, "max": 150, "description": "샘플링 반복 횟수입니다. 이 워크플로는 저스텝(4) 고속 생성용으로 설정되어 있습니다." },

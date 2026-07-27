@@ -340,6 +340,91 @@ def apply_variables(workflow, workflow_name, variables, manifest):
     return errors
 
 
+def _resolve_constant_bool(workflow, value):
+    """스위치 입력 값을 상수 bool로 해석합니다.
+
+    bool 리터럴이거나 PrimitiveBoolean 노드로의 링크([nodeId, 0])면 그 값을,
+    상수로 확정할 수 없으면 None을 반환합니다.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, list) and len(value) == 2:
+        src = workflow.get(str(value[0]))
+        if isinstance(src, dict) and src.get("class_type") == "PrimitiveBoolean":
+            flag = (src.get("inputs") or {}).get("value")
+            if isinstance(flag, bool):
+                return flag
+    return None
+
+
+def fold_constant_switches(workflow):
+    """상수 불리언으로 분기가 확정된 ComfySwitchNode를 접어 선택된 입력으로 직결합니다.
+
+    스위치 출력([nodeId, 0])을 참조하는 모든 입력을 선택된 분기(on_true/on_false)
+    값으로 바꾼 뒤 스위치 노드를 제거합니다. 이렇게 하면 선택되지 않은 분기가
+    그래프에서 끊어져 prune_unreachable_nodes()로 제거될 수 있고, 예를 들어
+    '참조 이미지 사용'이 꺼진 UI 워크플로는 LoadImage 없이도 실행됩니다.
+    스위치가 다른 스위치를 물고 있는 경우를 위해 변화가 없을 때까지 반복합니다.
+    """
+    changed = True
+    while changed:
+        changed = False
+        for node_id, node in list(workflow.items()):
+            if not isinstance(node, dict) or node.get("class_type") != "ComfySwitchNode":
+                continue
+            inputs = node.get("inputs") or {}
+            flag = _resolve_constant_bool(workflow, inputs.get("switch"))
+            if flag is None:
+                continue
+            selected = inputs.get("on_true" if flag else "on_false")
+            for other in workflow.values():
+                other_inputs = other.get("inputs") if isinstance(other, dict) else None
+                if not isinstance(other_inputs, dict):
+                    continue
+                for field, value in other_inputs.items():
+                    if isinstance(value, list) and len(value) == 2 \
+                            and str(value[0]) == node_id:
+                        other_inputs[field] = selected
+            del workflow[node_id]
+            changed = True
+
+
+def prune_unreachable_nodes(workflow, object_info):
+    """어떤 노드도 참조하지 않는 비출력(non-output) 노드를 반복 제거합니다.
+
+    fold_constant_switches()로 끊어진 분기(예: 사용 안 하는 LoadImage 체인)를
+    지워, ComfyUI 검증이 미사용 노드의 빈 입력 때문에 실패하지 않게 합니다.
+    ComfyUI 자체도 출력 노드에서 역방향으로만 실행하므로 의미는 동일합니다.
+
+    출력 노드 여부는 object_info의 output_node 플래그로 판정하고, object_info에
+    정보가 없는 노드(미설치 커스텀 노드 등)는 안전하게 보존합니다.
+    object_info가 None(ComfyUI 미연결)이면 아무것도 하지 않습니다.
+    """
+    if object_info is None:
+        return
+    while True:
+        referenced = set()
+        for node in workflow.values():
+            inputs = node.get("inputs") if isinstance(node, dict) else None
+            if not isinstance(inputs, dict):
+                continue
+            for value in inputs.values():
+                if isinstance(value, list) and len(value) == 2:
+                    referenced.add(str(value[0]))
+        removable = []
+        for node_id, node in workflow.items():
+            if node_id in referenced or not isinstance(node, dict):
+                continue
+            info = object_info.get(node.get("class_type", ""))
+            if not isinstance(info, dict) or info.get("output_node"):
+                continue
+            removable.append(node_id)
+        if not removable:
+            return
+        for node_id in removable:
+            del workflow[node_id]
+
+
 def set_seed(workflow, seed):
     """모든 노드 inputs에서 seed/noise_seed 숫자 필드를 찾아 시드를 설정합니다."""
     found = False
@@ -464,15 +549,19 @@ def attach_variable_options(variables, object_info, workflow):
 
 # ──────────────────────────── 사전 검증 (preflight) ────────────────────────────
 
-def build_workflow(workflow_name, variables, manifest):
+def build_workflow(workflow_name, variables, manifest, object_info=None):
     """워크플로를 로드하고 변수를 덮어쓴 최종 워크플로를 만듭니다.
 
+    변수 적용 후 상수 스위치를 접고(fold) 끊어진 분기를 제거(prune)합니다.
     /generate 제출 경로와 /preflight 사전 검증이 이 함수를 공유합니다
     (치환 로직이 갈라지면 검증과 실제 제출 결과가 어긋나므로 복제 금지).
     반환: (workflow dict, 변수 적용 오류 목록)
     """
     workflow = load_workflow(workflow_name)
     errors = apply_variables(workflow, workflow_name, variables, manifest)
+    if not errors:
+        fold_constant_switches(workflow)
+        prune_unreachable_nodes(workflow, object_info)
     return workflow, errors
 
 
@@ -958,9 +1047,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
         seed_warning = ""
         try:
             manifest = load_variables_manifest()
+            object_info = fetch_object_info()  # 미사용 분기 제거(prune)용 — None이면 제거 생략
             prompt_ids = {}
             for i in range(count):
-                workflow, errors = build_workflow(workflow_name, variables, manifest)
+                workflow, errors = build_workflow(workflow_name, variables, manifest, object_info)
                 if errors:
                     self.send_error_json("변수 적용 실패: " + "; ".join(errors))
                     return
@@ -1016,9 +1106,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             return
         variables = req.get("variables") or {}
 
+        object_info = fetch_object_info()
         try:
             manifest = load_variables_manifest()
-            workflow, errors = build_workflow(workflow_name, variables, manifest)
+            workflow, errors = build_workflow(workflow_name, variables, manifest, object_info)
         except FileNotFoundError as e:
             self.send_error_json(str(e), 404)
             return
@@ -1026,7 +1117,6 @@ class BridgeHandler(BaseHTTPRequestHandler):
             self.send_error_json("변수 적용 실패: " + "; ".join(errors))
             return
 
-        object_info = fetch_object_info()
         if object_info is None:
             self.send_json({
                 "ok": True,

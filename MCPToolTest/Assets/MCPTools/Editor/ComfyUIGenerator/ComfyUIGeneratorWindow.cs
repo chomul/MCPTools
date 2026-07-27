@@ -2012,7 +2012,9 @@ namespace MCPTools.Editor
                             variables[def.Key] = state.boolValue;
                             break;
                         case "image":
-                            if (!string.IsNullOrEmpty(state.imageLocalPath))
+                            // 표시 조건을 만족하지 않는 참조 이미지(예: '참조 이미지 사용' 꺼짐)는
+                            // 브리지가 해당 분기를 제거하므로 업로드하지 않는다.
+                            if (!string.IsNullOrEmpty(state.imageLocalPath) && IsVariableVisible(def))
                             {
                                 _statusMessage = $"이미지 업로드 중: {Path.GetFileName(state.imageLocalPath)}";
                                 Repaint();

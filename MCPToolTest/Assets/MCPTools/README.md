@@ -274,7 +274,7 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 - **워크플로** 드롭다운 — 브리지 서버의 `GET /workflows` 목록(`GenerateImage` / `GenerateImageFlux` / `UI` / `StyleChange` / `Audio`)에서 선택합니다. 선택하면 해당 워크플로의 **변수 편집 UI가 동적으로 생성**됩니다 (기본값 = 원본 JSON의 현재 값, **[기본값 복원]** 버튼 제공).
 - 선택한 워크플로가 요구하는 **커스텀 노드가 ComfyUI에 없으면 창 상단에 경고**가 표시됩니다 (누락 노드 이름 + ComfyUI-Manager 설치 안내). ComfyUI에 연결되지 않은 상태에서는 검증이 생략되어 경고가 나오지 않습니다.
 - 변수 타입별 UI: 문자열=TextField, 정수=IntField, 실수=FloatField, bool=Toggle, **이미지=[파일 선택]**(생성 시 자동으로 `POST /upload`로 업로드되어 파일명이 치환됨).
-  - **참조 이미지(`image` 타입) 변수는 기본값이 비어 있습니다.** 현재 화면에 표시된 image 변수 중 하나라도 비어 있으면 "참조 이미지를 선택해주세요" 안내와 함께 **[생성] 버튼이 비활성화**됩니다 (`UI`의 참조 이미지, `StyleChange`의 원본·스타일 참조 등). [파일 선택]으로 이미지를 지정하세요. 토글로 숨겨진(사용하지 않는) image 변수는 검사 대상이 아닙니다.
+  - **참조 이미지(`image` 타입) 변수는 기본값이 비어 있습니다.** 현재 화면에 표시된 image 변수 중 하나라도 비어 있으면 "참조 이미지를 선택해주세요" 안내와 함께 **[생성] 버튼이 비활성화**됩니다 (`UI`의 참조 이미지, `StyleChange`의 원본·스타일 참조 등). [파일 선택]으로 이미지를 지정하세요. 토글로 숨겨진(사용하지 않는) image 변수는 검사 대상이 아니며 업로드도 하지 않습니다 — 예를 들어 `UI`에서 **'참조 이미지 사용'을 끄면 참조 이미지 없이 생성**할 수 있습니다 (브리지 서버가 제출 전에 사용하지 않는 스위치 분기를 그래프에서 제거합니다).
 - 긍정/부정 프롬프트 변수는 PromptSet 항목 선택 시 자동으로 채워지며, 직접 수정할 수 있습니다.
 
 워크플로별 조정 변수 (ComfyUI.md 기준, 기본값은 원본 JSON 값):
@@ -282,7 +282,7 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 | 워크플로 | 변수 |
 |------|------|
 | `GenerateImage` | #1 `ckpt_name`, #2/#3 `text`(긍정/부정), #5 `steps`/`cfg`/`sampler_name`, #6 `width`/`height`, #9 `clip_name`/`type`, #10 `vae_name`, #21 `value`(배경 제거), #24 `lora_name`, #25 `unet_name`, #27 `value`(Checkpoint 사용), #29 `value`(LoRA 사용) |
-| `GenerateImageFlux` | #2/#3 `text`(긍정/부정), #5 `steps`/`cfg`/`sampler_name`, #6 `width`/`height`, #9 `clip_name`/`type`, #10 `vae_name` |
+| `GenerateImageFlux` | #2/#3 `text`(긍정/부정), #5 `steps`/`cfg`/`sampler_name`, #6 `width`/`height`, #9 `clip_name`/`type`, #10 `vae_name`, #25 `unet_name`(디퓨전 모델) |
 | `UI` | #8/#7 `text`(긍정/부정), #22 `value`(참조 이미지 사용), #17 `image`(참조 이미지, 업로드), #16 `width`/`height`, #5 `steps`/`cfg` |
 | `StyleChange` | #4/#38 `text`(긍정/부정), #16 `image`(원본, 업로드), #18 `image`(스타일 참조, 업로드), #8 `steps`/`cfg`/`denoise` |
 | `Audio` | #3/#4 `text`(긍정/부정), #5 `steps`/`cfg`, #9 `seconds`, #11 `value`(SFX 모델 사용) |
