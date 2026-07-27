@@ -6,7 +6,7 @@ namespace MCPTools.Runtime
     public static class MCPToolsInfo
     {
         /// <summary>패키지 버전 문자열입니다.</summary>
-        public const string Version = "0.3.0";
+        public const string Version = "0.3.1";
     }
 
     /// <summary>

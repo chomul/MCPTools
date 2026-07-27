@@ -18,6 +18,7 @@
     { "nodeId": "6", "field": "height", "label": "Height", "type": "int", "default": 2560, "min": 64, "max": 4096, "description": "생성 이미지 세로 해상도(px)입니다. 64의 배수를 권장하며, 클수록 VRAM 사용량과 생성 시간이 늘어납니다." }
   ],
   "GenerateImageFlux": [
+    { "nodeId": "25", "field": "unet_name", "label": "디퓨전 모델명", "type": "string", "default": "flux-2-klein-base-4b-fp8.safetensors", "description": "ComfyUI/models/diffusion_models(unet) 폴더의 디퓨전 모델 파일명입니다." },
     { "nodeId": "9", "field": "clip_name", "label": "텍스트 인코더", "type": "string", "default": "qwen_3_4b.safetensors", "description": "ComfyUI/models/text_encoders 폴더의 텍스트 인코더(CLIP) 모델 파일명입니다." },
     { "nodeId": "9", "field": "type", "label": "CLIP 타입", "type": "string", "default": "flux2", "description": "텍스트 인코더 로더의 모델 계열 타입입니다 (예: flux2). 사용하는 모델 계열과 일치해야 합니다." },
     { "nodeId": "10", "field": "vae_name", "label": "VAE 파일명", "type": "string", "default": "flux2-vae.safetensors", "description": "ComfyUI/models/vae 폴더의 VAE 파일명입니다. 잘못 지정하면 색이 깨지거나 로드 오류가 납니다." },
