@@ -65,6 +65,11 @@ namespace MCPTools.Editor
         private string _documentPath = string.Empty;
         private bool _documentDirty;
 
+        // PromptSet 단위 저장 스코프 (문서 파일명 기반, CandidateGenerator.ScopeFromPromptSetPath).
+        // 항목 id(item_001…)는 문서마다 다시 시작하므로, 이 스코프로 후보/확정본 저장 위치를 격리한다.
+        // PromptSet 없이 쓰는 흐름(수동 생성, 새 문서 작성 중)은 빈 값 = 스코프 없음(기존 위치).
+        private string _documentScope = string.Empty;
+
         // 일괄 생성 대상으로 체크된 항목 ID들 (목록 행의 체크박스).
         private readonly HashSet<string> _checkedItemIds = new HashSet<string>();
 
@@ -528,6 +533,20 @@ namespace MCPTools.Editor
                     return;
                 }
 
+                // 현재 저장 스코프 표시 — 후보/확정본이 어느 폴더로 들어가는지 사용자가 알 수 있게 한다.
+                EditorGUILayout.LabelField(
+                    new GUIContent(
+                        string.IsNullOrEmpty(_documentScope)
+                            ? "저장 스코프: (없음 — 공용 폴더)"
+                            : $"저장 스코프: {_documentScope}",
+                        string.IsNullOrEmpty(_documentScope)
+                            ? "후보/확정본이 3_Candidates/{항목id}, 3_Confirmed/Images 에 저장됩니다. " +
+                              "문서를 저장하면 파일명 기반 스코프가 적용됩니다."
+                            : $"후보는 3_Candidates/{_documentScope}/{{항목id}}, " +
+                              $"확정본은 3_Confirmed/{_documentScope}/Images|Audio 에 저장됩니다. " +
+                              "다른 PromptSet의 같은 항목 id와 충돌하지 않습니다."),
+                    EditorStyles.miniLabel);
+
                 DrawItemListPanel();
                 DrawItemActionRow();
 
@@ -800,6 +819,7 @@ namespace MCPTools.Editor
             {
                 _document = new PromptSetDocument { createdAt = DateTime.Now.ToString("yyyy-MM-dd HH:mm") };
                 _documentPath = string.Empty;
+                _documentScope = string.Empty;
                 _documentDirty = false;
                 _checkedItemIds.Clear();
                 _selectedItemIndex = -1;
@@ -953,6 +973,8 @@ namespace MCPTools.Editor
             {
                 string saved = PromptBuilder.Save(_document, outputPath);
                 _documentPath = saved;
+                // 새 문서를 처음 저장하면 파일명이 정해지므로 그때부터 그 스코프를 적용한다.
+                _documentScope = CandidateGenerator.ScopeFromPromptSetPath(saved);
                 _documentDirty = false;
 
                 RefreshPromptSetPaths();
@@ -1158,7 +1180,7 @@ namespace MCPTools.Editor
             }
 
             // 기존 후보가 있으면 자동 로드해 썸네일로 보여준다.
-            List<CandidateInfo> existing = CandidateGenerator.ListCandidates(_settings, item.id);
+            List<CandidateInfo> existing = CandidateGenerator.ListCandidates(_settings, item.id, _documentScope);
             _candidates = existing;
             _candidatesItemId = existing.Count > 0 ? item.id : string.Empty;
             _selectedCandidateIndex = -1;
@@ -1186,7 +1208,8 @@ namespace MCPTools.Editor
         private void RefreshItemStatuses()
         {
             _candidateCounts.Clear();
-            _confirmedPaths = CandidateGenerator.GetConfirmedOutputPaths(_settings);
+            // 현재 문서 스코프의 확정 기록만 표시한다 (스코프 없이 남긴 구 기록은 하위 호환으로 포함).
+            _confirmedPaths = CandidateGenerator.GetConfirmedOutputPaths(_settings, _documentScope);
             if (_document == null)
             {
                 return;
@@ -1194,7 +1217,8 @@ namespace MCPTools.Editor
 
             foreach (PromptItem item in _document.items)
             {
-                _candidateCounts[item.id] = CandidateGenerator.ListCandidates(_settings, item.id).Count;
+                _candidateCounts[item.id] =
+                    CandidateGenerator.ListCandidates(_settings, item.id, _documentScope).Count;
             }
         }
 
@@ -1825,7 +1849,7 @@ namespace MCPTools.Editor
 
                         List<CandidateInfo> generated = await CandidateGenerator.GenerateAsync(
                             _settings, item, wfName, batchVariables, null, interactive: true,
-                            progress: progress, ct: _cancelSource.Token);
+                            progress: progress, ct: _cancelSource.Token, scope: _documentScope);
                         _candidateCounts[item.id] = generated.Count;
                         done++;
                     }
@@ -1885,7 +1909,8 @@ namespace MCPTools.Editor
                 PromptItem current = SelectedItem();
                 if (current != null)
                 {
-                    List<CandidateInfo> existing = CandidateGenerator.ListCandidates(_settings, current.id);
+                    List<CandidateInfo> existing =
+                        CandidateGenerator.ListCandidates(_settings, current.id, _documentScope);
                     if (existing.Count > 0)
                     {
                         _candidates = existing;
@@ -1945,9 +1970,10 @@ namespace MCPTools.Editor
                 Dictionary<string, object> variables = await BuildVariablesAsync(_cancelSource.Token);
 
                 BridgeWorkflowInfo workflow = SelectedWorkflow();
+                // 수동 생성(SelectedItem() == null)은 _documentScope가 빈 값이라 기존 위치에 저장된다.
                 List<CandidateInfo> candidates = await CandidateGenerator.GenerateAsync(
                     _settings, item, workflow != null ? workflow.name : null, variables, null,
-                    interactive: true, progress: progress, ct: _cancelSource.Token);
+                    interactive: true, progress: progress, ct: _cancelSource.Token, scope: _documentScope);
 
                 _candidates = candidates;
                 _candidatesItemId = item.id;
@@ -2142,6 +2168,74 @@ namespace MCPTools.Editor
                         CandidatePreviewWindow.Open(candidate.path, candidate.seed);
                     }
                 }
+
+                // 생성 중에는 후보 목록이 갱신 중이므로 막고, Play Mode·컴파일 중에는
+                // AssetDatabase 삭제가 도메인 리로드와 얽히므로 다른 실행 버튼과 동일하게 막는다.
+                using (new EditorGUI.DisabledScope(_generating || _blockedReason != null))
+                {
+                    if (GUILayout.Button(
+                            new GUIContent("삭제", "이 후보 파일을 삭제합니다 (같은 시드의 메타 JSON 포함)."),
+                            GUILayout.Width(cellSize), GUILayout.Height(ButtonHeight)))
+                    {
+                        DeleteCandidateAt(index);
+                        // 그리기 도중 후보 목록이 바뀌었으므로 이번 프레임 레이아웃을 중단한다
+                        // (Layout/Repaint 컨트롤 수 불일치 예외 방지).
+                        GUIUtility.ExitGUI();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// 후보 그리드의 후보 1개를 확인 다이얼로그 후 삭제하고 목록/배지 캐시를 갱신합니다.
+        /// 실패(파일 없음 등)는 다이얼로그로 안내합니다 (창의 다른 삭제 UX와 동일).
+        /// </summary>
+        private void DeleteCandidateAt(int index)
+        {
+            if (index < 0 || index >= _candidates.Count)
+            {
+                return;
+            }
+
+            CandidateInfo candidate = _candidates[index];
+            if (!EditorUtility.DisplayDialog("후보 삭제",
+                    $"시드 {candidate.seed} 후보를 삭제합니다.\n{candidate.path}\n\n" +
+                    "삭제한 파일은 되돌릴 수 없습니다. 계속할까요?", "삭제", "취소"))
+            {
+                return;
+            }
+
+            try
+            {
+                EditorAudioPreview.Stop(); // 재생 중인 오디오 후보를 지울 수 있으므로 먼저 정지
+                CandidateGenerator.DeleteCandidate(_settings, _candidatesItemId, candidate.path);
+
+                _candidates.RemoveAt(index);
+                if (_selectedCandidateIndex == index)
+                {
+                    _selectedCandidateIndex = -1;
+                }
+                else if (_selectedCandidateIndex > index)
+                {
+                    _selectedCandidateIndex--;
+                }
+
+                if (!string.IsNullOrEmpty(_candidatesItemId))
+                {
+                    _candidateCounts[_candidatesItemId] = _candidates.Count;
+                }
+
+                if (_candidates.Count == 0)
+                {
+                    _candidatesItemId = string.Empty;
+                }
+
+                _statusMessage = $"후보를 삭제했습니다: {candidate.path}";
+                Repaint();
+            }
+            catch (Exception e)
+            {
+                EditorUtility.DisplayDialog("후보 삭제 실패", e.Message, "확인");
             }
         }
 
@@ -2195,7 +2289,7 @@ namespace MCPTools.Editor
             try
             {
                 string outputPath = CandidateGenerator.ConfirmCandidate(
-                    _settings, _candidatesItemId, _candidates[_selectedCandidateIndex].path);
+                    _settings, _candidatesItemId, _candidates[_selectedCandidateIndex].path, _documentScope);
                 _statusMessage = $"확정 완료: {outputPath}";
                 ShowNotification(new GUIContent("후보를 확정했습니다."));
 
@@ -2281,6 +2375,7 @@ namespace MCPTools.Editor
 
                 _document = doc;
                 _documentPath = path;
+                _documentScope = CandidateGenerator.ScopeFromPromptSetPath(path);
                 _documentDirty = false;
                 _checkedItemIds.Clear();
                 _candidates.Clear();

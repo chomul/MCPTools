@@ -27,6 +27,9 @@ namespace MCPTools.Editor
     /// 3단계 후보 생성 오케스트레이터입니다. 기준 시드에서 seed..seed+N-1 순차 큐잉으로
     /// 후보 N개(기본 4개)를 생성해 <c>Assets/Generated/3_Candidates/{assetItemId}/</c>에 저장하고,
     /// 선택된 후보를 <c>Assets/Generated/3_Confirmed/Images/</c>(오디오는 Audio/)로 확정 복사합니다.
+    /// PromptSet 단위 스코프(<see cref="ScopeFromPromptSetPath"/>)를 지정하면 후보/확정본이
+    /// <c>3_Candidates/{scope}/{id}/</c>·<c>3_Confirmed/{scope}/Images|Audio/</c>로 격리되어
+    /// 문서마다 다시 시작하는 항목 id(item_001…)끼리 충돌하지 않습니다 (미지정 시 기존 위치 그대로).
     /// </summary>
     public static class CandidateGenerator
     {
@@ -54,26 +57,189 @@ namespace MCPTools.Editor
         }
 
         /// <summary>
+        /// PromptSet 문서 경로에서 저장 스코프 키를 만듭니다 (파일명에서 확장자를 뗀 뒤 금지 문자를 '_'로 치환).
+        /// 항목 id(item_001…)는 문서마다 다시 시작하므로, 이 키로 후보/확정본 저장 위치를 PromptSet 단위로
+        /// 격리해 서로 다른 문서의 같은 id끼리 충돌하지 않게 합니다.
+        /// </summary>
+        /// <param name="promptSetPath">PromptSet JSON 경로 (Assets/ 기준 상대 경로). null/빈 값 허용.</param>
+        /// <returns>스코프 키 (예: "PromptSet_20260721_0512"). 경로가 비어 있으면 빈 문자열(스코프 없음).</returns>
+        public static string ScopeFromPromptSetPath(string promptSetPath)
+        {
+            if (string.IsNullOrEmpty(promptSetPath))
+            {
+                return string.Empty;
+            }
+
+            return SanitizeScope(Path.GetFileNameWithoutExtension(promptSetPath.Replace('\\', '/')));
+        }
+
+        /// <summary>
+        /// 스코프 키를 폴더 이름으로 쓸 수 있게 정규화합니다 (금지 문자 '_' 치환).
+        /// 정규화 결과가 "." 만으로 이루어지면(".", ".." 등 상위 폴더 탈출 위험) 빈 스코프로 취급합니다.
+        /// </summary>
+        /// <param name="scope">스코프 키. null/빈 값 허용.</param>
+        /// <returns>정규화된 스코프 키. 쓸 수 없는 값이면 빈 문자열.</returns>
+        internal static string SanitizeScope(string scope)
+        {
+            if (string.IsNullOrEmpty(scope))
+            {
+                return string.Empty;
+            }
+
+            string sanitized = PreviewFileNameForId(scope);
+            return sanitized.Trim('.').Length == 0 ? string.Empty : sanitized;
+        }
+
+        /// <summary>
         /// 항목의 후보 저장 폴더 경로를 반환합니다 (Assets/ 기준 상대 경로).
         /// </summary>
         /// <param name="settings">설정 객체.</param>
         /// <param name="assetItemId">항목 ID.</param>
-        /// <returns>예: "Assets/Generated/3_Candidates/item_001".</returns>
+        /// <param name="scope">
+        /// PromptSet 단위 저장 스코프 키 (<see cref="ScopeFromPromptSetPath"/> 참조).
+        /// null/빈 값이면 스코프 없이 기존 위치를 사용합니다 (기존 동작).
+        /// </param>
+        /// <returns>예: "Assets/Generated/3_Candidates/PromptSet_20260721_0512/item_001" (스코프 없으면 "3_Candidates/item_001").</returns>
         /// <remarks>
-        /// 하위 폴더 도입 이전에 만들어진 후보는 "Generated/Candidates/{id}"에 있다.
-        /// 새 위치에 폴더가 없고 구 위치에만 있으면 구 위치를 돌려줘 기존 후보를 계속 볼 수 있게 한다.
+        /// 읽기 폴백 순서: 스코프 하위 폴더 → 스코프 없는 위치("3_Candidates/{id}") →
+        /// 하위 폴더 도입 이전 위치("Candidates/{id}"). 어느 위치에도 폴더가 없으면
+        /// 새로 만들 대상 경로(스코프 있으면 스코프 하위)를 돌려줍니다.
         /// </remarks>
-        public static string GetCandidateFolder(MCPToolSettings settings, string assetItemId)
+        public static string GetCandidateFolder(MCPToolSettings settings, string assetItemId, string scope = null)
         {
             string id = SanitizeId(assetItemId);
-            string current = $"{MCPToolFolders.CandidatesRoot(settings)}/{id}";
+            string root = MCPToolFolders.CandidatesRoot(settings);
+            string legacy = $"{MCPToolFolders.GeneratedRoot(settings)}/{MCPToolFolders.LegacyCandidatesFolder}/{id}";
+
+            string s = SanitizeScope(scope);
+            if (s.Length > 0)
+            {
+                string scoped = $"{root}/{s}/{id}";
+                if (Directory.Exists(scoped))
+                {
+                    return scoped;
+                }
+
+                // 하위 호환: 스코프 도입 이전에 만든 후보는 스코프 없는 위치에 있다. 읽기는 계속 폴백한다.
+                string unscoped = $"{root}/{id}";
+                if (Directory.Exists(unscoped))
+                {
+                    return unscoped;
+                }
+
+                return Directory.Exists(legacy) ? legacy : scoped;
+            }
+
+            string current = $"{root}/{id}";
             if (Directory.Exists(current))
             {
                 return current;
             }
 
-            string legacy = $"{MCPToolFolders.GeneratedRoot(settings)}/{MCPToolFolders.LegacyCandidatesFolder}/{id}";
             return Directory.Exists(legacy) ? legacy : current;
+        }
+
+        /// <summary>
+        /// 새 후보를 저장할 폴더를 결정합니다. 읽기(<see cref="GetCandidateFolder"/>)와 달리
+        /// 스코프가 지정되면 구 위치에 폴더가 있어도 <b>항상 스코프 하위 폴더</b>를 씁니다 —
+        /// 폴백을 따라가면 이어지는 ClearFolder가 다른 PromptSet의 후보를 지우기 때문입니다.
+        /// </summary>
+        internal static string GetCandidateWriteFolder(MCPToolSettings settings, string assetItemId, string scope)
+        {
+            string s = SanitizeScope(scope);
+            if (s.Length == 0)
+            {
+                return GetCandidateFolder(settings, assetItemId);
+            }
+
+            return $"{MCPToolFolders.CandidatesRoot(settings)}/{s}/{SanitizeId(assetItemId)}";
+        }
+
+        /// <summary>
+        /// 후보 파일 1개를 삭제합니다 (같은 시드의 메타 JSON과 .meta 포함).
+        /// AssetDatabase 기준으로 지워 프로젝트 창에 바로 반영되며, 아직 임포트되지 않은 파일은
+        /// 디스크에서 직접 지운 뒤 Refresh합니다.
+        /// </summary>
+        /// <param name="settings">설정 객체.</param>
+        /// <param name="assetItemId">항목 ID (오류 안내용).</param>
+        /// <param name="candidatePath">삭제할 후보 파일 경로 (Assets/ 기준 상대 경로).</param>
+        /// <returns>삭제한 후보 파일 경로 (구분자 '/').</returns>
+        /// <exception cref="FileNotFoundException">후보 파일이 없는 경우.</exception>
+        /// <exception cref="InvalidOperationException">후보 폴더 밖의 경로를 지운 경우 (안전장치).</exception>
+        public static string DeleteCandidate(MCPToolSettings settings, string assetItemId, string candidatePath)
+        {
+            if (settings == null)
+            {
+                throw new ArgumentNullException(nameof(settings));
+            }
+
+            candidatePath = (candidatePath ?? string.Empty).Replace('\\', '/');
+            if (string.IsNullOrEmpty(candidatePath))
+            {
+                throw new ArgumentException("candidatePath가 비어 있습니다.", nameof(candidatePath));
+            }
+
+            if (!File.Exists(candidatePath))
+            {
+                throw new FileNotFoundException(
+                    $"항목 \"{assetItemId}\"의 삭제할 후보 파일을 찾을 수 없습니다: \"{candidatePath}\". " +
+                    "mcptools_list_candidates 또는 창의 후보 목록을 확인해주세요.",
+                    candidatePath);
+            }
+
+            // 안전장치: 후보 폴더(신·구 위치) 밖의 파일은 지우지 않는다 — 잘못된 경로로 확정본·프로젝트
+            // 에셋을 지우는 사고를 막는다.
+            string candidatesRoot = $"{MCPToolFolders.CandidatesRoot(settings)}/";
+            string legacyRoot =
+                $"{MCPToolFolders.GeneratedRoot(settings)}/{MCPToolFolders.LegacyCandidatesFolder}/";
+            bool escapesRoot = candidatePath.Contains("/../"); // "루트로 시작하지만 ..로 빠져나가는 경로" 차단
+            if (escapesRoot ||
+                (!candidatePath.StartsWith(candidatesRoot, StringComparison.OrdinalIgnoreCase) &&
+                 !candidatePath.StartsWith(legacyRoot, StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException(
+                    $"후보 폴더({candidatesRoot} 또는 {legacyRoot}) 밖의 파일은 삭제할 수 없습니다: \"{candidatePath}\"");
+            }
+
+            bool needsRefresh = DeleteFileAsset(candidatePath);
+
+            // 같은 시드의 후보 메타 JSON도 함께 지운다 ({시드}.png ↔ {시드}.json).
+            string folder = Path.GetDirectoryName(candidatePath);
+            string metaJson =
+                $"{(folder ?? string.Empty).Replace('\\', '/')}/{Path.GetFileNameWithoutExtension(candidatePath)}.json";
+            if (File.Exists(metaJson))
+            {
+                needsRefresh |= DeleteFileAsset(metaJson);
+            }
+
+            if (needsRefresh)
+            {
+                AssetDatabase.Refresh();
+            }
+
+            return candidatePath;
+        }
+
+        /// <summary>
+        /// 파일 1개를 지웁니다. AssetDatabase가 아는 에셋이면 DeleteAsset(.meta 포함)으로,
+        /// 아니면 File.Delete + .meta 직접 삭제로 지웁니다.
+        /// </summary>
+        /// <returns>File.Delete 폴백을 썼으면 true (호출자가 Refresh 필요).</returns>
+        private static bool DeleteFileAsset(string path)
+        {
+            if (path.StartsWith("Assets/", StringComparison.Ordinal) && AssetDatabase.DeleteAsset(path))
+            {
+                return false;
+            }
+
+            File.Delete(path);
+            string meta = path + ".meta";
+            if (File.Exists(meta))
+            {
+                File.Delete(meta);
+            }
+
+            return true;
         }
 
         /// <summary>
@@ -101,6 +267,11 @@ namespace MCPTools.Editor
         /// </param>
         /// <param name="progress">0~1 전체 진행률 콜백.</param>
         /// <param name="ct">취소 토큰.</param>
+        /// <param name="scope">
+        /// PromptSet 단위 저장 스코프 키 (<see cref="ScopeFromPromptSetPath"/> 참조).
+        /// 지정하면 후보를 <c>3_Candidates/{scope}/{항목id}/</c>에 저장해 다른 PromptSet의 같은 id와
+        /// 충돌하지 않습니다. null/빈 값이면 기존 위치(<c>3_Candidates/{항목id}/</c>)를 사용합니다.
+        /// </param>
         /// <returns>생성된 후보 목록 (경로 + 시드).</returns>
         /// <exception cref="InvalidOperationException">
         /// 브리지/ComfyUI 미기동, 워크플로 거부 등 생성 실패 시. interactive=false에서는 사전 검증 실패도 포함합니다.
@@ -110,7 +281,7 @@ namespace MCPTools.Editor
             MCPToolSettings settings, PromptItem item, string workflowName,
             Dictionary<string, object> variables, long? baseSeed, bool interactive = false,
             bool refreshAssets = true,
-            IProgress<float> progress = null, CancellationToken ct = default)
+            IProgress<float> progress = null, CancellationToken ct = default, string scope = null)
         {
             if (settings == null)
             {
@@ -125,7 +296,9 @@ namespace MCPTools.Editor
             string workflow = string.IsNullOrEmpty(workflowName) ? DefaultWorkflowFor(settings, item) : workflowName;
             int count = Mathf.Max(1, settings.candidateCount);
 
-            string folder = GetCandidateFolder(settings, item.id);
+            // 쓰기 위치: 스코프가 있으면 항상 스코프 하위 폴더 (구 위치 폴백을 따라가면
+            // 이어지는 ClearFolder가 다른 PromptSet의 후보를 지운다).
+            string folder = GetCandidateWriteFolder(settings, item.id, scope);
 
             var results = new List<CandidateInfo>();
 
@@ -187,7 +360,7 @@ namespace MCPTools.Editor
                 await RunPreflightAsync(client, workflow, mergedVariables, interactive, ct);
 
                 // 이어지는 ClearFolder가 다른 항목의 후보를 지우는 상황(파일명 충돌)이면 먼저 알린다.
-                WarnIfCandidateFolderTakenByOtherItem(settings, item.id, folder);
+                WarnIfCandidateFolderTakenByOtherItem(item.id, folder);
 
                 ClearFolder(folder);
                 Directory.CreateDirectory(folder);
@@ -292,11 +465,16 @@ namespace MCPTools.Editor
         /// </summary>
         /// <param name="settings">설정 객체.</param>
         /// <param name="assetItemId">항목 ID.</param>
+        /// <param name="scope">
+        /// PromptSet 단위 저장 스코프 키. 지정하면 스코프 하위 폴더를 우선 조회하고,
+        /// 없으면 구 위치로 폴백합니다 (<see cref="GetCandidateFolder"/> 규칙). null이면 기존 동작.
+        /// </param>
         /// <returns>후보 목록. 폴더가 없으면 빈 목록.</returns>
-        public static List<CandidateInfo> ListCandidates(MCPToolSettings settings, string assetItemId)
+        public static List<CandidateInfo> ListCandidates(
+            MCPToolSettings settings, string assetItemId, string scope = null)
         {
             var results = new List<CandidateInfo>();
-            string folder = GetCandidateFolder(settings, assetItemId);
+            string folder = GetCandidateFolder(settings, assetItemId, scope);
             if (!Directory.Exists(folder))
             {
                 return results;
@@ -324,14 +502,22 @@ namespace MCPTools.Editor
         /// 에디터/Unity 재시작 후에도 이 파일 기록으로 확정 상태가 복원됩니다.
         /// </summary>
         /// <param name="settings">설정 객체.</param>
+        /// <param name="scope">
+        /// PromptSet 단위 저장 스코프 키. <b>null이면 스코프 무관 전체 기록</b>을 반환합니다 (기존 동작 —
+        /// 같은 id가 여러 스코프에 있으면 나중 기록이 이깁니다). 값을 주면(빈 문자열 포함) 그 스코프의
+        /// 기록과 스코프 없이 남긴 구 기록만 반환합니다 (하위 호환: 스코프 도입 이전 확정도 계속 표시).
+        /// </param>
         /// <returns>확정된 항목 ID → 확정본 경로(Assets/ 기준 상대 경로) 맵. 기록 파일이 없으면 빈 맵.</returns>
-        public static Dictionary<string, string> GetConfirmedOutputPaths(MCPToolSettings settings)
+        public static Dictionary<string, string> GetConfirmedOutputPaths(
+            MCPToolSettings settings, string scope = null)
         {
             var paths = new Dictionary<string, string>();
             if (settings == null)
             {
                 return paths;
             }
+
+            string scopeFilter = scope == null ? null : SanitizeScope(scope);
 
             // 문서 읽기·스키마 버전 경고는 LoadResultsDocument 한 곳에 모아 둔다 (읽는 쪽이 갈라지지 않게).
             Dictionary<string, object> doc = LoadResultsDocument(settings);
@@ -341,10 +527,19 @@ namespace MCPTools.Editor
                 {
                     var dict = entry as Dictionary<string, object>;
                     string id = dict != null ? GetMetaString(dict, "assetItemId") : string.Empty;
-                    if (!string.IsNullOrEmpty(id))
+                    if (string.IsNullOrEmpty(id))
                     {
-                        paths[id] = GetMetaString(dict, "outputPath");
+                        continue;
                     }
+
+                    // 스코프 필터: 지정 스코프의 기록 + 스코프 없는(구/공용) 기록만 남긴다.
+                    string entryScope = GetMetaString(dict, "scope");
+                    if (scopeFilter != null && entryScope.Length > 0 && entryScope != scopeFilter)
+                    {
+                        continue;
+                    }
+
+                    paths[id] = GetMetaString(dict, "outputPath");
                 }
             }
 
@@ -358,9 +553,15 @@ namespace MCPTools.Editor
         /// <param name="settings">설정 객체.</param>
         /// <param name="assetItemId">항목 ID.</param>
         /// <param name="candidatePath">확정할 후보 파일 경로 (Assets/ 기준 상대 경로).</param>
+        /// <param name="scope">
+        /// PromptSet 단위 저장 스코프 키 (<see cref="ScopeFromPromptSetPath"/> 참조).
+        /// 지정하면 확정본이 <c>3_Confirmed/{scope}/Images|Audio/</c>에 저장되어 다른 PromptSet의
+        /// 같은 id 확정본을 덮어쓰지 않습니다. null/빈 값이면 기존 위치(<c>3_Confirmed/Images|Audio/</c>).
+        /// </param>
         /// <returns>확정본 경로 (Assets/ 기준 상대 경로).</returns>
         /// <exception cref="FileNotFoundException">후보 파일이 없는 경우.</exception>
-        public static string ConfirmCandidate(MCPToolSettings settings, string assetItemId, string candidatePath)
+        public static string ConfirmCandidate(
+            MCPToolSettings settings, string assetItemId, string candidatePath, string scope = null)
         {
             if (settings == null)
             {
@@ -375,12 +576,14 @@ namespace MCPTools.Editor
                     candidatePath);
             }
 
-            Dictionary<string, object> meta = ReadCandidateMeta(settings, assetItemId);
+            Dictionary<string, object> meta = ReadCandidateMeta(settings, assetItemId, scope);
 
             string ext = Path.GetExtension(candidatePath).ToLowerInvariant();
             bool isAudio = ext == ".flac" || ext == ".wav" || ext == ".mp3" || ext == ".ogg";
+            string s = SanitizeScope(scope);
             string root = MCPToolFolders.ConfirmedRoot(settings);
-            string destFolder = isAudio ? $"{root}/Audio" : $"{root}/Images";
+            string scopedRoot = s.Length == 0 ? root : $"{root}/{s}";
+            string destFolder = isAudio ? $"{scopedRoot}/Audio" : $"{scopedRoot}/Images";
             Directory.CreateDirectory(destFolder);
 
             string destPath = $"{destFolder}/{SanitizeId(assetItemId)}{ext}";
@@ -398,7 +601,7 @@ namespace MCPTools.Editor
 
             long seed;
             long.TryParse(Path.GetFileNameWithoutExtension(candidatePath), out seed);
-            RecordResult(settings, assetItemId, candidatePath, destPath, seed, meta);
+            RecordResult(settings, assetItemId, candidatePath, destPath, seed, meta, s);
 
             AssetDatabase.Refresh();
             return destPath;
@@ -618,10 +821,16 @@ namespace MCPTools.Editor
         }
 
         /// <summary>후보 폴더에서 아무 메타 JSON 하나를 읽습니다 (항목 공통 필드 사용 목적).</summary>
-        private static Dictionary<string, object> ReadCandidateMeta(MCPToolSettings settings, string assetItemId)
+        private static Dictionary<string, object> ReadCandidateMeta(
+            MCPToolSettings settings, string assetItemId, string scope = null)
         {
-            string folder = GetCandidateFolder(settings, assetItemId);
-            if (!Directory.Exists(folder))
+            return ReadCandidateMetaInFolder(GetCandidateFolder(settings, assetItemId, scope));
+        }
+
+        /// <summary>지정한 후보 폴더에서 아무 메타 JSON 하나를 읽습니다.</summary>
+        private static Dictionary<string, object> ReadCandidateMetaInFolder(string folder)
+        {
+            if (string.IsNullOrEmpty(folder) || !Directory.Exists(folder))
             {
                 return null;
             }
@@ -638,11 +847,16 @@ namespace MCPTools.Editor
             return null;
         }
 
-        /// <summary>확정 결과를 GenerationResults.json에 누적 기록합니다 (같은 항목은 갱신).</summary>
+        /// <summary>
+        /// 확정 결과를 GenerationResults.json에 누적 기록합니다 (같은 항목·같은 스코프는 갱신).
+        /// 스코프가 다른 같은 id의 기록은 서로 다른 확정본이므로 그대로 보존합니다.
+        /// </summary>
         private static void RecordResult(
             MCPToolSettings settings, string assetItemId, string candidatePath, string outputPath,
-            long seed, Dictionary<string, object> meta)
+            long seed, Dictionary<string, object> meta, string scope)
         {
+            scope = scope ?? string.Empty;
+
             // 이 문서에는 4단계 적용 이력(applications, ApplyHistory)이 형제 키로 함께 들어 있다.
             // 문서 전체를 읽어 results만 갈아끼우고 나머지 키는 그대로 다시 써야 이력이 날아가지 않는다.
             Dictionary<string, object> doc = LoadResultsDocument(settings);
@@ -653,9 +867,11 @@ namespace MCPTools.Editor
                 foreach (object entry in list)
                 {
                     var dict = entry as Dictionary<string, object>;
-                    if (dict == null || GetMetaString(dict, "assetItemId") == assetItemId)
+                    if (dict == null ||
+                        (GetMetaString(dict, "assetItemId") == assetItemId &&
+                         GetMetaString(dict, "scope") == scope))
                     {
-                        continue; // 같은 항목의 기존 기록은 새 기록으로 대체
+                        continue; // 같은 항목·같은 스코프의 기존 기록은 새 기록으로 대체
                     }
 
                     results.Add(dict);
@@ -665,6 +881,7 @@ namespace MCPTools.Editor
             results.Add(new Dictionary<string, object>
             {
                 { "assetItemId", assetItemId },
+                { "scope", scope },
                 { "sourceCandidate", candidatePath },
                 { "outputPath", outputPath },
                 { "seed", seed },
@@ -887,10 +1104,9 @@ namespace MCPTools.Editor
         /// 폴더의 후보 메타 JSON에 기록된 원본 assetItemId로만 판정하므로,
         /// 메타가 없는 구 후보 폴더에서는 조용히 넘어갑니다.
         /// </summary>
-        private static void WarnIfCandidateFolderTakenByOtherItem(
-            MCPToolSettings settings, string assetItemId, string folder)
+        private static void WarnIfCandidateFolderTakenByOtherItem(string assetItemId, string folder)
         {
-            Dictionary<string, object> meta = ReadCandidateMeta(settings, assetItemId);
+            Dictionary<string, object> meta = ReadCandidateMetaInFolder(folder);
             string owner = meta != null ? GetMetaString(meta, "assetItemId") : string.Empty;
             if (string.IsNullOrEmpty(owner) || owner == assetItemId)
             {

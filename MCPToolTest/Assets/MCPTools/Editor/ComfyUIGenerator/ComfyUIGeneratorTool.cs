@@ -7,10 +7,13 @@ using UnityEditor;
 namespace MCPTools.Editor
 {
     /// <summary>
-    /// 3단계 생성 MCP 도구를 등록합니다. 생성/조회/확정 3분할 + Job 방식:
+    /// 3단계 생성 MCP 도구를 등록합니다. 생성/조회/확정/삭제 4분할 + Job 방식:
     /// - mcptools_generate_candidates: 생성 Job 시작 (즉시 status:"started" 반환, 완료까지 대기하지 않음).
     /// - mcptools_list_candidates: Job 상태(running/completed/failed/idle)와 후보 목록 반환.
     /// - mcptools_select_candidate: 후보 확정 (창과 동일한 <see cref="CandidateGenerator.ConfirmCandidate"/> 공용 로직).
+    /// - mcptools_delete_candidate: 후보 1개 삭제 (<see cref="CandidateGenerator.DeleteCandidate"/>).
+    /// 생성/조회/확정은 선택 파라미터 scope(PromptSet 파일명 기반 저장 스코프)를 받으며,
+    /// 미지정 시 스코프 없는 기존 위치를 그대로 사용합니다 (기존 호출과 호환).
     /// </summary>
     [InitializeOnLoad]
     public static class ComfyUIGeneratorTool
@@ -23,37 +26,57 @@ namespace MCPTools.Editor
             public List<CandidateInfo> Candidates = new List<CandidateInfo>();
         }
 
-        // assetItemId → 최근 Job 상태 (도메인 리로드 시 초기화되며, 후보 파일 자체는 디스크에 남는다)
+        // Job 키("{scope}/{assetItemId}", 스코프 없으면 assetItemId) → 최근 Job 상태
+        // (도메인 리로드 시 초기화되며, 후보 파일 자체는 디스크에 남는다)
         private static readonly Dictionary<string, GenerationJob> Jobs = new Dictionary<string, GenerationJob>();
+
+        /// <summary>스코프가 다른 같은 id의 Job이 섞이지 않도록 Job 사전 키를 만듭니다.</summary>
+        private static string JobKey(string assetItemId, string scope)
+        {
+            string s = CandidateGenerator.SanitizeScope(scope);
+            return s.Length == 0 ? assetItemId : $"{s}/{assetItemId}";
+        }
 
         static ComfyUIGeneratorTool()
         {
             McpToolRegistry.Register(
                 "mcptools_generate_candidates",
                 "3단계 후보 생성 Job을 브리지 서버 경유로 시작합니다 (비동기, 완료까지 기다리지 않음). 기준 시드부터 " +
-                "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{assetItemId}/에 저장합니다. " +
+                "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{scope?}/{assetItemId}/에 저장합니다. " +
                 "완료 여부와 결과는 mcptools_list_candidates로 폴링하세요. " +
                 "파라미터: promptSetPath(필수, Assets/ 상대 PromptSet JSON), assetItemId(필수), " +
                 "workflowName(선택: GenerateImage|GenerateImageFlux|UI|StyleChange|Audio, 기본은 항목 종류별 자동 선택), " +
-                "variables(선택, {\"nodeId.field\": 값} 객체 — 워크플로 노드 inputs 덮어쓰기), baseSeed(선택, 기본 무작위). " +
-                "반환 data: { status:\"started\", assetItemId, candidateFolder }.",
+                "variables(선택, {\"nodeId.field\": 값} 객체 — 워크플로 노드 inputs 덮어쓰기), baseSeed(선택, 기본 무작위), " +
+                "scope(선택, PromptSet 단위 저장 스코프 — 보통 PromptSet 파일명에서 확장자를 뗀 값. 지정하면 다른 " +
+                "PromptSet의 같은 id와 충돌하지 않으며, 이후 list/select 호출에도 같은 scope를 넘겨야 합니다. " +
+                "미지정 시 기존 위치 그대로). " +
+                "반환 data: { status:\"started\", assetItemId, scope, candidateFolder }.",
                 ExecuteGenerate);
 
             McpToolRegistry.Register(
                 "mcptools_list_candidates",
                 "3단계 후보 생성 Job 상태와 후보 목록을 반환합니다. " +
-                "파라미터: assetItemId(필수). " +
+                "파라미터: assetItemId(필수), scope(선택 — 생성 시 넘긴 scope와 같은 값. 미지정 시 스코프 없는 위치 조회). " +
                 "반환 data: { status: \"running\"|\"completed\"|\"failed\"|\"idle\", message, candidates:[{path,seed}] }. " +
                 "idle은 이 세션에 Job 기록이 없는 상태로, 디스크의 기존 후보 목록을 반환합니다.",
                 ExecuteList);
 
             McpToolRegistry.Register(
                 "mcptools_select_candidate",
-                "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/Images/(오디오는 Audio/)로 복사하고 " +
+                "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/{scope?}/Images/(오디오는 Audio/)로 복사하고 " +
                 "GenerationResults.json에 기록하며, 이미지 항목은 Sprite 임포트 설정을 적용합니다(RawImage 대상은 Texture 유지). " +
-                "파라미터: assetItemId(필수), candidatePath(필수, mcptools_list_candidates가 반환한 후보 경로). " +
+                "파라미터: assetItemId(필수), candidatePath(필수, mcptools_list_candidates가 반환한 후보 경로), " +
+                "scope(선택 — 생성 시 넘긴 scope와 같은 값. 미지정 시 기존 위치 그대로). " +
                 "반환 data: { selectedPath }.",
                 ExecuteSelect);
+
+            McpToolRegistry.Register(
+                "mcptools_delete_candidate",
+                "3단계 후보 1개를 삭제합니다 (파일 + .meta + 같은 시드의 메타 JSON). " +
+                "후보 폴더(3_Candidates/, 구 Candidates/) 밖의 경로는 안전장치로 거부합니다. " +
+                "파라미터: assetItemId(필수), candidatePath(필수, mcptools_list_candidates가 반환한 후보 경로). " +
+                "반환 data: { deletedPath, assetItemId }.",
+                ExecuteDelete);
         }
 
         private static object ExecuteGenerate(Dictionary<string, object> parameters)
@@ -66,8 +89,11 @@ namespace MCPTools.Editor
                     "promptSetPath(2단계 PromptSet JSON의 Assets/ 상대 경로)와 assetItemId 파라미터가 필요합니다.");
             }
 
+            string scope = GetString(parameters, "scope");
+            string jobKey = JobKey(assetItemId, scope);
+
             GenerationJob existing;
-            if (Jobs.TryGetValue(assetItemId, out existing) && existing.Status == "running")
+            if (Jobs.TryGetValue(jobKey, out existing) && existing.Status == "running")
             {
                 throw new InvalidOperationException(
                     $"항목 \"{assetItemId}\"의 생성 Job이 이미 실행 중입니다. mcptools_list_candidates로 완료를 확인해주세요.");
@@ -102,28 +128,30 @@ namespace MCPTools.Editor
 
             var settings = MCPToolSettings.GetOrCreate();
             var job = new GenerationJob();
-            Jobs[assetItemId] = job;
+            Jobs[jobKey] = job;
 
             // Job 시작: 완료까지 기다리지 않고 상태만 갱신한다 (에디터 메인스레드 데드락 방지).
-            RunJobAsync(job, settings, item, workflowName, variables, baseSeed);
+            RunJobAsync(job, settings, item, workflowName, variables, baseSeed, scope);
 
             return new Dictionary<string, object>
             {
                 { "status", "started" },
                 { "assetItemId", assetItemId },
-                { "candidateFolder", CandidateGenerator.GetCandidateFolder(settings, assetItemId) }
+                { "scope", CandidateGenerator.SanitizeScope(scope) },
+                // 생성이 실제로 저장할 폴더를 알린다 (읽기 폴백 경로가 아니라 쓰기 위치).
+                { "candidateFolder", CandidateGenerator.GetCandidateWriteFolder(settings, assetItemId, scope) }
             };
         }
 
         private static async void RunJobAsync(
             GenerationJob job, MCPToolSettings settings, PromptItem item, string workflowName,
-            Dictionary<string, object> variables, long? baseSeed)
+            Dictionary<string, object> variables, long? baseSeed, string scope)
         {
             try
             {
                 List<CandidateInfo> candidates =
                     await CandidateGenerator.GenerateAsync(
-                        settings, item, workflowName, variables, baseSeed, interactive: false);
+                        settings, item, workflowName, variables, baseSeed, interactive: false, scope: scope);
                 job.Candidates = candidates;
                 job.Status = "completed";
                 job.Message = $"후보 {candidates.Count}개 생성 완료.";
@@ -143,6 +171,7 @@ namespace MCPTools.Editor
                 throw new ArgumentException("assetItemId 파라미터가 필요합니다.");
             }
 
+            string scope = GetString(parameters, "scope");
             var settings = MCPToolSettings.GetOrCreate();
 
             string status = "idle";
@@ -150,17 +179,17 @@ namespace MCPTools.Editor
             List<CandidateInfo> candidates;
 
             GenerationJob job;
-            if (Jobs.TryGetValue(assetItemId, out job))
+            if (Jobs.TryGetValue(JobKey(assetItemId, scope), out job))
             {
                 status = job.Status;
                 message = job.Message;
                 candidates = job.Status == "completed"
                     ? job.Candidates
-                    : CandidateGenerator.ListCandidates(settings, assetItemId);
+                    : CandidateGenerator.ListCandidates(settings, assetItemId, scope);
             }
             else
             {
-                candidates = CandidateGenerator.ListCandidates(settings, assetItemId);
+                candidates = CandidateGenerator.ListCandidates(settings, assetItemId, scope);
                 message = candidates.Count > 0
                     ? "이 세션의 Job 기록은 없지만 디스크에 기존 후보가 있습니다."
                     : "생성된 후보가 없습니다. mcptools_generate_candidates로 먼저 생성하세요.";
@@ -193,12 +222,32 @@ namespace MCPTools.Editor
                 throw new ArgumentException("assetItemId와 candidatePath 파라미터가 필요합니다.");
             }
 
+            string scope = GetString(parameters, "scope");
             var settings = MCPToolSettings.GetOrCreate();
-            string selectedPath = CandidateGenerator.ConfirmCandidate(settings, assetItemId, candidatePath);
+            string selectedPath = CandidateGenerator.ConfirmCandidate(settings, assetItemId, candidatePath, scope);
 
             return new Dictionary<string, object>
             {
                 { "selectedPath", selectedPath }
+            };
+        }
+
+        private static object ExecuteDelete(Dictionary<string, object> parameters)
+        {
+            string assetItemId = GetString(parameters, "assetItemId");
+            string candidatePath = GetString(parameters, "candidatePath");
+            if (string.IsNullOrEmpty(assetItemId) || string.IsNullOrEmpty(candidatePath))
+            {
+                throw new ArgumentException("assetItemId와 candidatePath 파라미터가 필요합니다.");
+            }
+
+            var settings = MCPToolSettings.GetOrCreate();
+            string deletedPath = CandidateGenerator.DeleteCandidate(settings, assetItemId, candidatePath);
+
+            return new Dictionary<string, object>
+            {
+                { "deletedPath", deletedPath },
+                { "assetItemId", assetItemId }
             };
         }
 

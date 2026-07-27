@@ -57,8 +57,9 @@ namespace MCPTools.Editor
         /// <summary>
         /// 항목의 확정본 에셋 경로를 자동 탐색합니다.
         /// 항목에 <see cref="AssetListItem.spriteSheetPath"/>가 지정되어 있으면 자동 탐색 대신 그 경로를 사용합니다.
-        /// 그 외에는 GenerationResults.json의 outputPath 기록을 우선 사용하고,
-        /// 없으면 규칙 경로(Assets/Generated/3_Confirmed/Images/{id}.png, Audio/{id}.*, 구 위치도 함께 탐색)를 탐색합니다.
+        /// 그 외에는 GenerationResults.json의 outputPath 기록을 우선 사용하고, 없으면 규칙 경로
+        /// (Assets/Generated/3_Confirmed/Images/{id}.png, Audio/{id}.* — PromptSet 스코프 하위 폴더
+        /// 3_Confirmed/{scope}/Images|Audio 와 구 위치도 함께 탐색)를 탐색합니다.
         /// </summary>
         /// <param name="settings">설정 객체.</param>
         /// <param name="item">대상 항목.</param>
@@ -139,39 +140,83 @@ namespace MCPTools.Editor
                 }
             }
 
-            // 2) 규칙 경로 폴백 — 새 확정본 폴더를 먼저 보고, 없으면 구 위치(생성 루트 바로 아래)를 본다.
-            foreach (string confirmedRoot in new[]
-                     {
-                         MCPToolFolders.ConfirmedRoot(settings),
-                         MCPToolFolders.GeneratedRoot(settings)
-                     })
+            // 2) 규칙 경로 폴백 — 새 확정본 폴더를 먼저 보고, 그다음 PromptSet 스코프 하위 폴더
+            //    (3_Confirmed/{scope}/Images|Audio — GenerationResults.json 기록이 지워진 경우 대비),
+            //    마지막으로 구 위치(생성 루트 바로 아래)를 본다.
+            string confirmedRoot = MCPToolFolders.ConfirmedRoot(settings);
+
+            string found = FindByRuleUnder(confirmedRoot, item);
+            if (found != null)
             {
-                if (item.assetType == "audio")
+                return found;
+            }
+
+            found = FindInScopeSubfolders(confirmedRoot, item);
+            if (found != null)
+            {
+                return found;
+            }
+
+            return FindByRuleUnder(MCPToolFolders.GeneratedRoot(settings), item);
+        }
+
+        /// <summary>확정본 루트 1곳에서 규칙 경로({루트}/Images/{id}.png, Audio/{id}.*)로 확정본을 찾습니다.</summary>
+        private static string FindByRuleUnder(string confirmedRoot, AssetListItem item)
+        {
+            if (item.assetType == "audio")
+            {
+                string audioFolder = $"{confirmedRoot}/Audio";
+                if (Directory.Exists(audioFolder))
                 {
-                    string audioFolder = $"{confirmedRoot}/Audio";
-                    if (Directory.Exists(audioFolder))
+                    foreach (string ext in new[] { ".flac", ".wav", ".mp3", ".ogg" })
                     {
-                        foreach (string ext in new[] { ".flac", ".wav", ".mp3", ".ogg" })
+                        string path = $"{audioFolder}/{item.id}{ext}";
+                        if (File.Exists(path))
                         {
-                            string path = $"{audioFolder}/{item.id}{ext}";
-                            if (File.Exists(path))
-                            {
-                                return path;
-                            }
+                            return path;
                         }
                     }
                 }
-                else
+
+                return null;
+            }
+
+            string imagePath = $"{confirmedRoot}/Images/{item.id}.png";
+            return File.Exists(imagePath) ? imagePath : null;
+        }
+
+        /// <summary>
+        /// 확정본 루트의 PromptSet 스코프 하위 폴더들(3_Confirmed/{scope}/)에서 규칙 경로로 확정본을 찾습니다.
+        /// 고정 하위 폴더(Images/Audio/SpriteSheets/Animations)는 스코프가 아니므로 건너뛰고,
+        /// 같은 id가 여러 스코프에 있으면 <b>가장 최근에 저장된 파일</b>을 채택합니다 (마지막 확정 우선).
+        /// </summary>
+        private static string FindInScopeSubfolders(string confirmedRoot, AssetListItem item)
+        {
+            if (!Directory.Exists(confirmedRoot))
+            {
+                return null;
+            }
+
+            string newest = null;
+            DateTime newestTime = DateTime.MinValue;
+            foreach (string dir in Directory.GetDirectories(confirmedRoot))
+            {
+                string name = Path.GetFileName(dir);
+                if (name == "Images" || name == "Audio" ||
+                    name == MCPToolFolders.SpriteSheetsFolder || name == MCPToolFolders.AnimationsFolder)
                 {
-                    string imagePath = $"{confirmedRoot}/Images/{item.id}.png";
-                    if (File.Exists(imagePath))
-                    {
-                        return imagePath;
-                    }
+                    continue;
+                }
+
+                string found = FindByRuleUnder(dir.Replace('\\', '/'), item);
+                if (found != null && File.GetLastWriteTime(found) > newestTime)
+                {
+                    newest = found;
+                    newestTime = File.GetLastWriteTime(found);
                 }
             }
 
-            return null;
+            return newest;
         }
 
         /// <summary>

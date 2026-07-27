@@ -210,11 +210,13 @@ namespace MCPTools.Editor
     /// </summary>
     [McpForUnityTool("mcptools_generate_candidates",
         Description = "3단계 후보 생성 Job을 브리지 서버 경유로 시작합니다 (비동기, 완료까지 기다리지 않음). 기준 시드부터 " +
-                      "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{assetItemId}/에 저장합니다. " +
+                      "+1씩 증가시키며 후보를 생성해 Assets/Generated/3_Candidates/{scope?}/{assetItemId}/에 저장합니다. " +
                       "완료 여부와 결과는 mcptools_list_candidates로 폴링하세요. " +
                       "파라미터: promptSetPath(필수), assetItemId(필수), " +
                       "workflowName(선택: GenerateImage|GenerateImageFlux|UI|StyleChange|Audio), " +
-                      "variables(선택, {\"nodeId.field\": 값} 객체), baseSeed(선택).")]
+                      "variables(선택, {\"nodeId.field\": 값} 객체), baseSeed(선택), " +
+                      "scope(선택, PromptSet 단위 저장 스코프 — 보통 PromptSet 파일명에서 확장자를 뗀 값. " +
+                      "이후 list/select에도 같은 값을 넘겨야 하며, 미지정 시 기존 위치 그대로).")]
     public static class McpToolsGenerateCandidatesTool
     {
         /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
@@ -251,6 +253,13 @@ namespace MCPTools.Editor
             /// <summary>기준 시드.</summary>
             [ToolParameter("기준 시드. 생략하면 무작위로 생성합니다.", Required = false)]
             public long? baseSeed { get; set; }
+
+            /// <summary>PromptSet 단위 저장 스코프.</summary>
+            [ToolParameter("PromptSet 단위 저장 스코프 (보통 PromptSet 파일명에서 확장자를 뗀 값, 예: PromptSet_20260721_0512). " +
+                           "지정하면 후보가 3_Candidates/{scope}/{id}/에 저장되어 다른 PromptSet의 같은 id와 충돌하지 않습니다. " +
+                           "이후 mcptools_list_candidates/mcptools_select_candidate에도 같은 값을 넘기세요. 생략 시 기존 위치 그대로.",
+                Required = false)]
+            public string scope { get; set; }
         }
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
@@ -268,7 +277,7 @@ namespace MCPTools.Editor
     /// </summary>
     [McpForUnityTool("mcptools_list_candidates",
         Description = "3단계 후보 생성 Job 상태와 후보 목록을 반환합니다. " +
-                      "파라미터: assetItemId(필수). " +
+                      "파라미터: assetItemId(필수), scope(선택 — 생성 시 넘긴 scope와 같은 값). " +
                       "반환 data: { status: running|completed|failed|idle, message, candidates:[{path,seed}] }.")]
     public static class McpToolsListCandidatesTool
     {
@@ -278,6 +287,12 @@ namespace MCPTools.Editor
             /// <summary>조회할 항목 id.</summary>
             [ToolParameter("조회할 항목 id.", Required = true)]
             public string assetItemId { get; set; }
+
+            /// <summary>PromptSet 단위 저장 스코프.</summary>
+            [ToolParameter("PromptSet 단위 저장 스코프 (mcptools_generate_candidates에 넘긴 scope와 같은 값). " +
+                           "생략 시 스코프 없는 위치를 조회하며, 구 위치(3_Candidates/{id}, Candidates/{id})로 폴백합니다.",
+                Required = false)]
+            public string scope { get; set; }
         }
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
@@ -294,9 +309,9 @@ namespace MCPTools.Editor
     /// 선택한 후보를 확정 경로로 복사하고 임포트 설정을 적용합니다.
     /// </summary>
     [McpForUnityTool("mcptools_select_candidate",
-        Description = "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/Images/(오디오는 Audio/)로 복사하고 " +
+        Description = "3단계 후보 1개를 확정합니다: Assets/Generated/3_Confirmed/{scope?}/Images/(오디오는 Audio/)로 복사하고 " +
                       "GenerationResults.json에 기록하며, 이미지 항목은 Sprite 임포트 설정을 적용합니다. " +
-                      "파라미터: assetItemId(필수), candidatePath(필수).")]
+                      "파라미터: assetItemId(필수), candidatePath(필수), scope(선택 — 생성 시 넘긴 scope와 같은 값).")]
     public static class McpToolsSelectCandidateTool
     {
         /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
@@ -309,14 +324,52 @@ namespace MCPTools.Editor
             /// <summary>확정할 후보 파일 경로.</summary>
             [ToolParameter("확정할 후보 파일 경로 (mcptools_list_candidates가 반환한 path).", Required = true)]
             public string candidatePath { get; set; }
+
+            /// <summary>PromptSet 단위 저장 스코프.</summary>
+            [ToolParameter("PromptSet 단위 저장 스코프 (mcptools_generate_candidates에 넘긴 scope와 같은 값). " +
+                           "지정하면 확정본이 3_Confirmed/{scope}/Images|Audio/에 저장됩니다. 생략 시 기존 위치 그대로.",
+                Required = false)]
+            public string scope { get; set; }
         }
 
         /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
-        /// <param name="params">파라미터 JSON 객체 (assetItemId, candidatePath).</param>
+        /// <param name="params">파라미터 JSON 객체 (assetItemId, candidatePath, scope).</param>
         /// <returns>{"success":bool,"message":string,"data":{selectedPath}} 형태의 응답 객체.</returns>
         public static object HandleCommand(JObject @params)
         {
             return McpForUnityAdapter.Handle("mcptools_select_candidate", @params);
+        }
+    }
+
+    /// <summary>
+    /// 3단계 후보 삭제 도구(mcptools_delete_candidate)를 MCP for Unity에 노출합니다.
+    /// 후보 파일 1개를 .meta와 같은 시드의 메타 JSON까지 함께 삭제합니다.
+    /// </summary>
+    [McpForUnityTool("mcptools_delete_candidate",
+        Description = "3단계 후보 1개를 삭제합니다 (파일 + .meta + 같은 시드의 메타 JSON). " +
+                      "후보 폴더(3_Candidates/, 구 Candidates/) 밖의 경로는 안전장치로 거부합니다. " +
+                      "파라미터: assetItemId(필수), candidatePath(필수, mcptools_list_candidates가 반환한 path). " +
+                      "반환 data: { deletedPath, assetItemId }.")]
+    public static class McpToolsDeleteCandidateTool
+    {
+        /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
+        public class Parameters
+        {
+            /// <summary>삭제할 후보의 항목 id.</summary>
+            [ToolParameter("삭제할 후보의 항목 id.", Required = true)]
+            public string assetItemId { get; set; }
+
+            /// <summary>삭제할 후보 파일 경로.</summary>
+            [ToolParameter("삭제할 후보 파일 경로 (mcptools_list_candidates가 반환한 path, Assets/ 기준 상대 경로).", Required = true)]
+            public string candidatePath { get; set; }
+        }
+
+        /// <summary>MCP for Unity 브리지가 리플렉션으로 호출하는 핸들러입니다.</summary>
+        /// <param name="params">파라미터 JSON 객체 (assetItemId, candidatePath).</param>
+        /// <returns>{"success":bool,"message":string,"data":{deletedPath,assetItemId}} 형태의 응답 객체.</returns>
+        public static object HandleCommand(JObject @params)
+        {
+            return McpForUnityAdapter.Handle("mcptools_delete_candidate", @params);
         }
     }
 

@@ -111,17 +111,20 @@ Assets/Docs/
 └── SpriteSheetPrompt/         SpriteSheetPrompt_{...}.json        (시트 프롬프트 문서)
 
 Assets/Generated/
-├── 3_Candidates/{항목id}/     {시드}.png + {시드}.json            (3단계 후보)
+├── 3_Candidates/{스코프}/{항목id}/   {시드}.png + {시드}.json      (3단계 후보)
 └── 3_Confirmed/
-    ├── Images/                {항목id}.png                        (3단계 확정본)
-    ├── Audio/                 {항목id}.flac|wav|mp3|ogg
+    ├── {스코프}/
+    │   ├── Images/            {항목id}.png                        (3단계 확정본)
+    │   └── Audio/             {항목id}.flac|wav|mp3|ogg
     ├── SpriteSheets/          {name}_sheet.png                    (슬라이스한 시트 이미지)
     └── GenerationResults.json 확정 기록
 ```
 
+**{스코프} = PromptSet 파일명(확장자 제외, 예: `PromptSet_20260721_0512`)** 입니다. 항목 id(`item_001`…)는 PromptSet 문서마다 다시 시작하므로, 후보/확정본을 PromptSet 단위 폴더로 격리해 다른 문서의 같은 id와 충돌(이전 후보가 새 항목의 후보처럼 보이거나 확정본을 덮어쓰는 문제)을 막습니다. 3단계 창에서 PromptSet을 로드하면 자동으로 그 스코프가 적용되고, PromptSet 없이 쓰는 흐름(수동 생성 등)은 스코프 없이 기존 위치(`3_Candidates/{항목id}`, `3_Confirmed/Images|Audio`)를 그대로 사용합니다.
+
 `Docs/SpriteSheetPrompt/`에는 **이미지가 아니라 외부 AI에 넘길 프롬프트 JSON**(`answers` + `prompt`)이 들어갑니다. `PromptSet`과 같은 성격이라 Docs 아래에 둡니다. 실제 **생성된 시트 이미지**는 `Generated/3_Confirmed/SpriteSheets/{name}_sheet.png`로 저장됩니다. 시트는 4단계 적용 대상이 아니라 슬라이스 입력이므로 항목별 확정본(`Images/`)과 분리해 둡니다.
 
-**기존 프로젝트 호환** — 하위 폴더 도입 이전에 루트에 저장된 산출물은 **옮기지 않아도 됩니다.** 목록 드롭다운과 확정본 자동 탐색이 새 하위 폴더와 구 위치를 **함께** 훑습니다(같은 파일명이 양쪽에 있으면 새 위치 우선). 새로 저장하는 파일만 하위 폴더로 들어갑니다. `GenerationResults.json`은 새 위치에 없으면 구 위치의 기록을 이어받아 저장합니다.
+**기존 프로젝트 호환** — 하위 폴더 도입 이전에 루트에 저장된 산출물은 **옮기지 않아도 됩니다.** 목록 드롭다운과 확정본 자동 탐색이 새 하위 폴더와 구 위치를 **함께** 훑습니다(같은 파일명이 양쪽에 있으면 새 위치 우선). 새로 저장하는 파일만 하위 폴더로 들어갑니다. `GenerationResults.json`은 새 위치에 없으면 구 위치의 기록을 이어받아 저장합니다(스코프와 무관하게 확정본 폴더 바로 아래 1개). 후보/확정본 읽기도 스코프 하위 폴더에 없으면 스코프 도입 이전 위치(`3_Candidates/{항목id}`, 더 오래된 `Candidates/{항목id}`, `3_Confirmed/Images|Audio`)로 폴백하므로 기존 후보·확정본이 계속 보입니다.
 
 ### MCPToolSettings 설정 항목
 
@@ -291,15 +294,16 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 
 ### 3) 생성 → 선택 → 확정
 
-1. **PromptSet JSON** 드롭다운(최신 파일 기본)에서 문서를 [로드]하고 **항목**을 선택합니다 (항목 선택 시 프롬프트 변수 자동 채움).
+1. **PromptSet JSON** 드롭다운(최신 파일 기본)에서 문서를 [로드]하고 **항목**을 선택합니다 (항목 선택 시 프롬프트 변수 자동 채움). 로드하면 문서 파일명 기반 **저장 스코프**가 자동 적용되고, 현재 스코프가 항목 목록 위에 `저장 스코프: PromptSet_...`으로 표시됩니다 — 후보/확정본이 그 스코프 폴더(`3_Candidates/{스코프}/{항목id}`, `3_Confirmed/{스코프}/Images|Audio`)로 저장되어 다른 PromptSet의 같은 항목 id와 충돌하지 않습니다.
 2. **[후보 N개 생성]** — **후보 개수** 슬라이더(1~12, 기본 4)로 한 번에 생성할 개수를 조절합니다. 값은 설정 에셋의 `candidateCount`에 저장되어 `Tools/MCP/Settings`와 공유되며, 전체 생성·MCP 도구 경로에도 같은 값이 적용됩니다. 개수가 많을수록 생성 시간과 VRAM 사용량이 늘어납니다.
-   제출 전에 **사전 검증(preflight)** 을 수행해 누락된 커스텀 노드와 ComfyUI에 없는 파일/값(모델 파일명 등)이 있으면 원인·조치를 담은 다이얼로그를 띄우고 생성을 중단합니다. 통과하면 무작위 기준 시드부터 `seed..seed+3` 4건을 브리지 서버가 큐잉/폴링합니다(설정 `candidateCount`). 진행률 바가 표시되고 [취소]할 수 있으며 에디터는 멈추지 않습니다. 결과는 `Assets/Generated/3_Candidates/{항목id}/{시드}.png` + 메타 `{시드}.json`(시드/프롬프트/워크플로/대상 정보)로 저장됩니다.
+   제출 전에 **사전 검증(preflight)** 을 수행해 누락된 커스텀 노드와 ComfyUI에 없는 파일/값(모델 파일명 등)이 있으면 원인·조치를 담은 다이얼로그를 띄우고 생성을 중단합니다. 통과하면 무작위 기준 시드부터 `seed..seed+3` 4건을 브리지 서버가 큐잉/폴링합니다(설정 `candidateCount`). 진행률 바가 표시되고 [취소]할 수 있으며 에디터는 멈추지 않습니다. 결과는 `Assets/Generated/3_Candidates/{스코프}/{항목id}/{시드}.png` + 메타 `{시드}.json`(시드/프롬프트/워크플로/대상 정보)로 저장됩니다 (PromptSet 없이 생성하면 스코프 없이 `3_Candidates/{항목id}/`).
 3. **[선택 항목 생성] / [미생성 전체 생성]** — 항목을 하나씩 생성하지 않고 **여러 항목을 현재 설정 그대로 한 번에** 생성합니다.
    - 목록 각 행의 **체크박스**로 대상을 고르고(상단 **[전체] / [해제] / [미생성]** 버튼으로 한 번에 조작), **[선택 항목 생성 (M개 × N)]** 을 누릅니다. **[미생성 전체 생성]** 은 후보가 없고 확정되지 않은 항목을 모두 대상으로 삼습니다.
    - 일괄 생성은 **화면에 설정된 워크플로와 변수 값을 그대로 모든 항목에 적용**하고, 프롬프트(positive/negative)만 항목별 값으로 대체합니다. 참조 이미지는 한 번만 업로드해 재사용합니다.
    - 실행 전 확인 다이얼로그에 대상 개수·워크플로·항목당 후보 수와 함께, 프롬프트가 비어 제외되는 항목 수, **기존 후보가 삭제되고 재생성되는 항목 수**가 표시됩니다.
    - 진행률 바에 `일괄 생성 중 (i/N) 항목명`이 표시되고 [취소]할 수 있습니다. 실패한 항목은 기록만 하고 다음 항목을 계속 진행하며, 완료 후 실패 목록이 요약됩니다(창을 닫으면 취소).
-4. 썸네일을 클릭해 선택 후 **[확정]** — `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/`)로 복사되고 `Assets/Generated/3_Confirmed/GenerationResults.json`에 기록됩니다. **[재생성]** 시 기존 후보를 삭제하고 새 시드로 다시 4장을 생성합니다.
+4. 썸네일을 클릭해 선택 후 **[확정]** — `Assets/Generated/3_Confirmed/{스코프}/Images/{항목id}.png`(오디오는 `Audio/`, 스코프 없으면 `3_Confirmed/Images|Audio/` 바로 아래)로 복사되고 `Assets/Generated/3_Confirmed/GenerationResults.json`에 기록됩니다. **[재생성]** 시 기존 후보를 삭제하고 새 시드로 다시 4장을 생성합니다.
+   각 후보 셀 아래의 **[삭제]** 버튼으로 마음에 들지 않는 후보를 개별 삭제할 수 있습니다 (확인 다이얼로그 1회, 같은 시드의 메타 JSON과 `.meta`도 함께 삭제).
 5. **확정 결과 표시** — 확정된 항목은 목록 행에 소형 썸네일과 `확정됨` 배지가 표시되고, 항목 선택 시 왼쪽 하단에 확정 에셋 미리보기(오디오는 아이콘+파일명)와 경로가 표시됩니다. 썸네일/[에셋 위치 보기 (Ping)] 클릭 시 프로젝트 창에서 해당 에셋을 핑합니다. 확정 상태는 `Assets/Generated/3_Confirmed/GenerationResults.json` 기록으로 에디터 재시작 후에도 유지되며, 확정 에셋이 삭제된 경우 "확정 에셋 없음(삭제됨)" 안내가 표시됩니다.
 6. **임포트 자동 설정** — 확정된 이미지는 TextureImporter로 **Sprite(2D and UI)** + `alphaIsTransparency` + PPU(`spritePixelsPerUnit`)가 적용됩니다. 단, 대상 프리팹의 대상 오브젝트가 **RawImage**인 항목만 Texture(Default)를 유지합니다.
 
@@ -344,7 +348,7 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 **대상 프리팹이 프리팹 모드로 열려 있는 경우**: 그 프리팹에 **저장하지 않은 변경이 있으면 적용을 막고** 안내합니다. 그대로 적용하면 작업 중이던 미저장 변경까지 함께 디스크에 저장되어 되돌릴 수 없기 때문입니다. 프리팹 모드에서 저장(Ctrl+S)하거나 변경을 버리고 닫은 뒤 다시 시도하세요.
 프리팹 모드의 **Auto Save는 Unity 기본값이 켜짐**이라 변경이 즉시 저장되므로, 평소에는 이 안내를 만나지 않습니다. Auto Save를 끄고 작업할 때만 해당합니다. (프리팹 안의 프리팹을 파고들어 프리팹 모드가 여러 겹 쌓인 경우, 검사는 가장 안쪽 한 겹만 봅니다 — 놓쳐도 값이 사라지지는 않습니다.)
 
-확정본 자동 탐색: `Assets/Generated/3_Confirmed/GenerationResults.json`의 `outputPath` 기록을 우선 사용하고, 없으면 `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/{항목id}.flac|wav|mp3|ogg`)를 찾습니다. 하위 폴더 도입 이전 위치(`Assets/Generated/Images` 등)도 함께 탐색합니다.
+확정본 자동 탐색: `Assets/Generated/3_Confirmed/GenerationResults.json`의 `outputPath` 기록을 우선 사용하고(스코프 확정본도 이 기록의 경로 그대로 적용됨), 없으면 `Assets/Generated/3_Confirmed/Images/{항목id}.png`(오디오는 `Audio/{항목id}.flac|wav|mp3|ogg`)를 찾습니다. PromptSet 스코프 하위 폴더(`3_Confirmed/{스코프}/Images|Audio` — 여러 스코프에 같은 id가 있으면 가장 최근 파일)와 하위 폴더 도입 이전 위치(`Assets/Generated/Images` 등)도 함께 탐색합니다.
 
 **스프라이트 시트 적용 (썸네일로 선택)**: 항목 상세의 "적용 대상 (수정 가능)" 박스에서 **[시트 고르기 (썸네일)]** 를 펼치면 `Assets/Generated/3_Confirmed/SpriteSheets/`의 시트가 **그림 그리드**로 나옵니다. 시트를 클릭하면(선택된 시트는 파란 테두리) 확정본 자동 탐색 대신 그 시트를 쓰고, **시트의 첫 프레임**이 `Image.sprite` / `SpriteRenderer.sprite`에 적용됩니다(재생 중에는 Animator가 프레임을 덮어쓰므로 초기 표시용입니다). [해제]로 미지정으로 되돌립니다. 프레임 이름을 직접 고르는 UI는 없으며, 특정 프레임이 필요하면 MCP `mcptools_apply_asset`의 `spriteName` 파라미터나 JSON의 `spriteName` 값으로 지정합니다. RawImage 대상은 Texture를 받으므로 `spriteName`을 지정하면 검증에서 걸러 안내합니다.
 
@@ -472,12 +476,13 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
   - `workflowName: string` (선택) — 워크플로 이름 (`GenerateImage` | `GenerateImageFlux` | `UI` | `StyleChange` | `Audio`). 생략 시 항목 종류별 자동 선택.
   - `variables: object` (선택) — `{"nodeId.field": 값}` 형태의 워크플로 변수 덮어쓰기 (예: `{"5.steps": 20, "6.width": 512}`). 사용 가능한 변수는 위 워크플로별 조정 변수 표 참조.
   - `baseSeed: long` (선택) — 기준 시드. 생략 시 무작위.
-- 반환 `data`: `{ status: "started", assetItemId, candidateFolder }`
-- 같은 항목의 Job이 이미 실행 중이면 오류를 반환합니다. 기존 후보는 삭제 후 새로 생성됩니다.
+  - `scope: string` (선택) — **PromptSet 단위 저장 스코프** (보통 PromptSet 파일명에서 확장자를 뗀 값, 예: `PromptSet_20260721_0512`). 지정하면 후보가 `3_Candidates/{scope}/{항목id}/`에 저장되어 다른 PromptSet의 같은 id와 충돌하지 않습니다. 이후 `mcptools_list_candidates`/`mcptools_select_candidate`에도 **같은 값**을 넘기세요. **생략 시 스코프 없이 기존 위치를 사용합니다 (기존 호출과 호환).**
+- 반환 `data`: `{ status: "started", assetItemId, scope, candidateFolder }`
+- 같은 항목(같은 스코프)의 Job이 이미 실행 중이면 오류를 반환합니다. 기존 후보는 삭제 후 새로 생성됩니다.
 
 ### `mcptools_list_candidates` — 후보 목록/Job 상태 조회
 
-- 파라미터: `assetItemId: string` (필수)
+- 파라미터: `assetItemId: string` (필수), `scope: string` (선택 — 생성 시 넘긴 scope와 같은 값. 생략 시 스코프 없는 위치를 조회하며, 스코프 하위 폴더가 없으면 구 위치로 폴백)
 - 반환 `data`: `{ status: "running" | "completed" | "failed" | "idle", message, candidates: [{ path, seed }] }`
   - `running` — 생성 중 (candidates에는 지금까지 저장된 파일만 포함될 수 있음)
   - `completed` / `failed` — 완료/실패 (`message`에 실패 원인)
@@ -485,9 +490,15 @@ AI(MCP 클라이언트)가 프롬프트를 작성할 재료를 반환합니다. 
 
 ### `mcptools_select_candidate` — 후보 확정
 
-- 파라미터: `assetItemId: string` (필수), `candidatePath: string` (필수, list가 반환한 후보 경로)
-- 반환 `data`: `{ selectedPath }` — `Assets/Generated/3_Confirmed/Images/`(오디오는 `Audio/`)로 복사된 확정본 경로
+- 파라미터: `assetItemId: string` (필수), `candidatePath: string` (필수, list가 반환한 후보 경로), `scope: string` (선택 — 생성 시 넘긴 scope와 같은 값)
+- 반환 `data`: `{ selectedPath }` — `Assets/Generated/3_Confirmed/{scope}/Images/`(오디오는 `Audio/`, scope 생략 시 `3_Confirmed/Images|Audio/` 바로 아래)로 복사된 확정본 경로
 - 창의 [확정]과 동일한 공용 로직: `GenerationResults.json` 기록 + 이미지 항목 Sprite 임포트 자동 설정(RawImage 대상 제외).
+
+### `mcptools_delete_candidate` — 후보 삭제
+
+- 파라미터: `assetItemId: string` (필수), `candidatePath: string` (필수, `mcptools_list_candidates`가 반환한 후보 경로 — `Assets/` 기준 상대 경로)
+- 반환 `data`: `{ deletedPath, assetItemId }`
+- 후보 파일과 `.meta`, 같은 시드의 메타 JSON(`{시드}.json`)을 함께 삭제합니다. 안전장치로 후보 폴더(`3_Candidates/`, 구 `Candidates/`) 밖의 경로는 거부합니다. 창의 후보 셀 [삭제] 버튼과 동일한 공용 로직입니다.
 
 ### `mcptools_apply_asset` — 4단계 단건 적용
 
@@ -645,7 +656,7 @@ AssetList / PromptSet / GenerationResults 세 문서의 최상위에 정수 `sch
 ```json
 {
   "schemaVersion": 1,
-  "results": [ { "assetItemId": "item_001", "outputPath": "...", "confirmedAt": "..." } ],
+  "results": [ { "assetItemId": "item_001", "scope": "PromptSet_20260721_0512", "outputPath": "...", "confirmedAt": "..." } ],
   "applications": [
     {
       "assetItemId": "item_001",
@@ -661,7 +672,7 @@ AssetList / PromptSet / GenerationResults 세 문서의 최상위에 정수 `sch
 }
 ```
 
-같은 항목의 기존 기록은 새 기록으로 대체됩니다. 이 파일을 지우면 "적용됨" 표시만 사라지고 프리팹에 적용된 값은 그대로 남습니다.
+같은 항목의 기존 기록은 새 기록으로 대체됩니다 (`results`는 항목 id + `scope`가 모두 같을 때만 대체 — 스코프가 다른 같은 id의 확정 기록은 서로 다른 확정본이므로 보존됩니다. `scope`는 PromptSet 스코프 없이 확정하면 빈 문자열이고, 스코프 도입 이전 문서에는 키 자체가 없습니다). 이 파일을 지우면 "적용됨" 표시만 사라지고 프리팹에 적용된 값은 그대로 남습니다.
 
 ## 공통 구성요소
 
