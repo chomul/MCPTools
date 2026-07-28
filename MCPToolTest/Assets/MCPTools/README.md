@@ -132,7 +132,7 @@ Assets/Generated/
 
 | 항목 | 기본값 | 설명 |
 |------|--------|------|
-| `comfyUIServerUrl` | `http://127.0.0.1:8188` | ComfyUI 서버 주소 (브리지 서버 실행 인자로 전달) |
+| `comfyUIServerUrl` | `http://127.0.0.1:8188` | ComfyUI 서버 주소 (브리지 서버 실행 인자로 전달). 설정 창의 [ComfyUI 자동 감지] 버튼으로 채울 수 있음 |
 | `bridgeServerUrl` | `http://127.0.0.1:8189` | 브리지 서버 주소 (Unity ↔ ComfyUI 중간 서버) |
 | `pythonExecutable` | `python` | 브리지 서버 실행에 사용할 Python 3 실행 파일. **비워두거나 기본값(`python`)이면 자동 탐지**하며(설치된 Python 3.7 이상을 찾아 실행해 검증), 자동 탐지가 실패하는 환경에서만 `python.exe` 절대 경로를 직접 지정하면 됩니다 (설정 창의 [Python 자동 탐지] 버튼으로 채울 수 있음) |
 | `requestTimeoutSeconds` | 300 | 요청(결과 다운로드 포함) 타임아웃(초) |
@@ -155,6 +155,7 @@ Assets/Generated/
 
 설정 창(`Tools/MCP/Settings`)의 버튼:
 
+- **[ComfyUI 자동 감지]** — 현재 PC에서 리스닝 중인 TCP 포트를 검사해 실행 중인 ComfyUI를 찾아 `comfyUIServerUrl`에 채웁니다(기본 8188이 아닌 포트로 띄운 경우에도 감지, 여러 개 발견 시 선택 메뉴). 로컬(127.0.0.1)에서 실행 중인 ComfyUI만 감지되며, 원격 서버는 직접 입력하세요. 적용 후 브리지 서버가 실행 중이면 재시작해야 새 주소가 반영됩니다.
 - **[Python 자동 탐지]** — 설치된 Python 3.7 이상을 찾아 `pythonExecutable`에 절대 경로를 채웁니다. 실패하면 원인·조치 안내 다이얼로그가 표시됩니다.
 - **[워크플로를 프로젝트로 복사]** — 패키지에 동봉된 워크플로 JSON과 `variables.json`을 **`Assets/MCPTools.User/ComfyUI/`** 로 복사합니다. 복사본이 있으면 브리지 서버가 패키지 동봉본보다 **우선 사용**하므로, 읽기 전용인 UPM 설치에서도 워크플로/변수를 자유롭게 수정할 수 있습니다. 복사 후 브리지 서버를 재시작하세요. → [사용자 확장](#사용자-확장)
 - **[서버 연결 테스트]** — 설정된 ComfyUI 주소로 연결을 확인합니다.

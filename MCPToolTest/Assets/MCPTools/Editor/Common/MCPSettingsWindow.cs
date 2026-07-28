@@ -1,5 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Net;
+using System.Net.Http;
+using System.Net.NetworkInformation;
 using System.Threading.Tasks;
 using MCPTools.Runtime;
 using UnityEditor;
@@ -14,7 +18,13 @@ namespace MCPTools.Editor
     {
         private MCPToolSettings _settings;
         private bool _isTesting;
+        private bool _isDetecting;
         private string _testStatusMessage = string.Empty;
+        private string _detectStatusMessage = string.Empty;
+
+        /// <summary>ComfyUI가 여러 개 감지됐을 때 다음 OnGUI 패스에서 선택 메뉴를 띄우기 위한 대기 목록입니다.</summary>
+        private int[] _pendingDetectedPorts;
+
         private Vector2 _scroll;
 
         /// <summary>설정 창을 엽니다.</summary>
@@ -120,6 +130,38 @@ namespace MCPTools.Editor
             }
 
             // 버튼은 변경 감지 블록 밖에 둔다 (버튼 클릭도 GUI.changed를 켜서 위 필드 값이 덮어쓰이는 것을 방지).
+            using (new EditorGUILayout.HorizontalScope())
+            {
+                GUILayout.Space(EditorGUIUtility.labelWidth);
+                using (new EditorGUI.DisabledScope(_isDetecting))
+                {
+                    if (GUILayout.Button(
+                            new GUIContent(_isDetecting ? "감지 중..." : "ComfyUI 자동 감지",
+                                "현재 PC에서 리스닝 중인 TCP 포트를 검사해 실행 중인 ComfyUI를 찾아 " +
+                                "위 \"ComfyUI 서버 주소\"에 채웁니다."),
+                            GUILayout.Width(160f)))
+                    {
+                        StartComfyUIDetection();
+                    }
+                }
+
+                GUILayout.FlexibleSpace();
+            }
+
+            if (!string.IsNullOrEmpty(_detectStatusMessage))
+            {
+                EditorGUILayout.LabelField(_detectStatusMessage, EditorStyles.wordWrappedLabel);
+            }
+
+            // 감지 결과가 여러 개면 다음 OnGUI 패스에서 선택 메뉴를 띄운다
+            // (async 완료 콜백에는 GUI 컨텍스트가 없어 GenericMenu를 바로 표시할 수 없음).
+            if (_pendingDetectedPorts != null && Event.current.type == EventType.Layout)
+            {
+                int[] detectedPorts = _pendingDetectedPorts;
+                _pendingDetectedPorts = null;
+                ShowPortSelectionMenu(detectedPorts);
+            }
+
             using (new EditorGUILayout.HorizontalScope())
             {
                 GUILayout.Space(EditorGUIUtility.labelWidth);
@@ -356,6 +398,176 @@ namespace MCPTools.Editor
                 _isTesting = false;
                 Repaint();
             }
+        }
+
+        private void StartComfyUIDetection()
+        {
+            if (_isDetecting)
+            {
+                return;
+            }
+
+            // async void 대신 async Task + fire-and-forget (예외는 내부에서 전부 처리)
+            _ = RunComfyUIDetectionAsync();
+        }
+
+        /// <summary>
+        /// 리스닝 중인 로컬 TCP 포트를 수집해 각 포트의 /system_stats를 병렬 조회하고,
+        /// ComfyUI 시그니처("comfyui_version")가 확인된 포트를 결과로 반영합니다.
+        /// 1개면 즉시 설정에 적용, 여러 개면 선택 메뉴 예약, 0개면 상태 라벨에 안내를 표시합니다.
+        /// </summary>
+        private async Task RunComfyUIDetectionAsync()
+        {
+            _isDetecting = true;
+            _detectStatusMessage = "실행 중인 ComfyUI를 찾는 중...";
+            Repaint();
+
+            try
+            {
+                int[] candidates = CollectLocalListeningPorts();
+                int[] found = await ProbeComfyUIPortsAsync(candidates);
+
+                // 감지 중 창이 닫혔으면 파괴된 창의 상태를 건드리지 않는다.
+                if (this == null)
+                {
+                    return;
+                }
+
+                if (found.Length == 0)
+                {
+                    _detectStatusMessage =
+                        "✗ 실행 중인 ComfyUI를 찾지 못했습니다. ComfyUI가 켜져 있는지 확인한 뒤 다시 시도하세요.";
+                }
+                else if (found.Length == 1)
+                {
+                    ApplyDetectedPort(found[0]);
+                }
+                else
+                {
+                    _detectStatusMessage = $"ComfyUI가 {found.Length}개 발견되었습니다. 사용할 포트를 선택하세요.";
+                    _pendingDetectedPorts = found;
+                }
+            }
+            catch (Exception e)
+            {
+                if (this != null)
+                {
+                    _detectStatusMessage = $"✗ 자동 감지 중 오류가 발생했습니다: {e.Message}";
+                }
+            }
+            finally
+            {
+                _isDetecting = false;
+                if (this != null)
+                {
+                    Repaint();
+                }
+            }
+        }
+
+        /// <summary>
+        /// 현재 PC에서 리스닝 중인 TCP 포트를 수집합니다.
+        /// 루프백(127.0.0.1/::1)과 Any(0.0.0.0/::) 바인딩만 대상으로 하고, 포트는 중복 없이 반환합니다.
+        /// </summary>
+        private static int[] CollectLocalListeningPorts()
+        {
+            var ports = new HashSet<int>();
+            foreach (IPEndPoint listener in IPGlobalProperties.GetIPGlobalProperties().GetActiveTcpListeners())
+            {
+                if (IPAddress.IsLoopback(listener.Address) ||
+                    listener.Address.Equals(IPAddress.Any) ||
+                    listener.Address.Equals(IPAddress.IPv6Any))
+                {
+                    ports.Add(listener.Port);
+                }
+            }
+
+            var sorted = new List<int>(ports);
+            sorted.Sort();
+            return sorted.ToArray();
+        }
+
+        /// <summary>
+        /// 각 포트의 /system_stats를 짧은 타임아웃(1초)으로 병렬 조회해
+        /// ComfyUI 시그니처("comfyui_version")가 있는 포트만 골라 오름차순으로 반환합니다.
+        /// 브리지 서버(기본 8189)는 /system_stats가 없으므로 이 검사에서 자동 배제됩니다.
+        /// </summary>
+        private static async Task<int[]> ProbeComfyUIPortsAsync(int[] ports)
+        {
+            using (var client = new HttpClient())
+            {
+                client.Timeout = TimeSpan.FromSeconds(1);
+
+                var probes = new List<Task<int>>(ports.Length);
+                foreach (int port in ports)
+                {
+                    probes.Add(ProbePortAsync(client, port));
+                }
+
+                int[] results = await Task.WhenAll(probes);
+                var found = new List<int>();
+                foreach (int port in results)
+                {
+                    if (port > 0)
+                    {
+                        found.Add(port);
+                    }
+                }
+
+                found.Sort();
+                return found.ToArray();
+            }
+        }
+
+        /// <summary>단일 포트가 ComfyUI인지 검사합니다. 맞으면 포트 번호, 아니면 0을 반환합니다.</summary>
+        private static async Task<int> ProbePortAsync(HttpClient client, int port)
+        {
+            try
+            {
+                string json = await client.GetStringAsync($"http://127.0.0.1:{port}/system_stats");
+                return json.Contains("\"comfyui_version\"") ? port : 0;
+            }
+            catch
+            {
+                // 연결 거부·타임아웃·HTTP 오류는 해당 포트가 ComfyUI가 아니라는 뜻이므로 조용히 무시한다.
+                return 0;
+            }
+        }
+
+        /// <summary>감지된 ComfyUI 포트 목록을 GenericMenu로 표시하고, 선택된 포트를 설정에 적용합니다.</summary>
+        private void ShowPortSelectionMenu(int[] ports)
+        {
+            var menu = new GenericMenu();
+            foreach (int port in ports)
+            {
+                int selected = port; // 클로저 캡처용 지역 변수
+                menu.AddItem(new GUIContent($"http://127.0.0.1:{selected}"), false, () => ApplyDetectedPort(selected));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        /// <summary>감지된 포트를 ComfyUI 서버 주소로 적용·저장하고 결과를 상태 라벨에 표시합니다.</summary>
+        private void ApplyDetectedPort(int port)
+        {
+            // 메뉴 선택 콜백이 창이 닫힌 뒤 돌아올 수 있으므로 방어한다.
+            if (this == null || _settings == null)
+            {
+                return;
+            }
+
+            string url = $"http://127.0.0.1:{port}";
+            Undo.RecordObject(_settings, "MCP Tools ComfyUI 주소 자동 감지");
+            _settings.comfyUIServerUrl = url;
+            EditorUtility.SetDirty(_settings);
+            AssetDatabase.SaveAssets();
+
+            // 편집 중이던 텍스트 필드가 옛 값을 유지하지 않도록 포커스를 해제한다.
+            GUI.FocusControl(null);
+            _detectStatusMessage =
+                $"✓ ComfyUI를 찾아 서버 주소를 적용했습니다: {url}\n" +
+                "브리지 서버가 실행 중이면 재시작해야 새 주소가 반영됩니다.";
+            Repaint();
         }
     }
 }

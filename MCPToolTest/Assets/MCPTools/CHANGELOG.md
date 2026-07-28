@@ -8,6 +8,41 @@
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-07-28
+
+### Added
+
+- 설정 창(`Tools/MCP/Settings`)에 **[ComfyUI 자동 감지]** 버튼 — 리스닝 중인 로컬 TCP 포트의 `/system_stats`를 병렬 조회해 실행 중인 ComfyUI를 찾아 `comfyUIServerUrl`에 적용합니다(기본 8188이 아닌 포트도 감지, 여러 개 발견 시 선택 메뉴, Undo 지원). 적용 시 브리지 서버 재시작 안내를 함께 표시합니다
+
+## [0.5.0] - 2026-07-27
+
+### Added
+
+- 3단계 후보 **개별 삭제** — 후보 그리드의 [삭제] 버튼과 MCP 도구 `mcptools_delete_candidate`
+- **PromptSet 단위 저장 스코프 분리** — 후보·확정본을 `3_Candidates/{PromptSet이름}/{항목id}/`, `3_Confirmed/{PromptSet이름}/Images|Audio/`로 나눠 저장해, 새 PromptSet 생성이 이전 PromptSet의 후보·확정본을 덮어쓰지 않습니다. 스코프 없는 구 위치는 읽기 폴백으로 계속 동작합니다
+
+## [0.4.0] - 2026-07-27
+
+### Added
+
+- 1단계 스캔·4단계 적용이 **커스텀 스크립트의 직렬화 Sprite/AudioClip 필드**를 슬롯으로 지원 — `SerializedObject` 기반으로 프리팹의 MonoBehaviour 최상위 필드(배열은 요소 16개까지)를 수집하고, 적용 시 `targetComponent`/`targetField`로 해당 필드에 할당합니다
+
+## [0.3.2] - 2026-07-27
+
+### Added
+
+- 브리지 서버: **상수 스위치 접기 + 미도달 노드 제거** — 스위치로 꺼진 분기(예: "참조 이미지 사용" 끔)의 노드를 워크플로에서 제거해, 참조 이미지 없이도 LoadImage 검증 오류 없이 생성할 수 있습니다
+
+### Changed
+
+- GenerateImageFlux 기본 해상도 1024×2560 → **512×512**
+
+## [0.3.1] - 2026-07-27
+
+### Added
+
+- GenerateImageFlux 워크플로에 **디퓨전 모델명 변수**(`unet_name`) 추가 — 3단계 창에서 모델 파일명을 직접 바꿀 수 있습니다
+
 ## [0.3.0] - 2026-07-26
 
 > 이 릴리스는 Task 6-1(스프라이트 시트 애니메이션) · Task 9(테스트·CI·배포 온보딩) ·
