@@ -240,6 +240,18 @@ namespace MCPTools.Editor
         /// </summary>
         private const int BackgroundBridgeMinWhite = 185;
 
+        /// <summary>
+        /// 배경 BFS가 건너뛸 수 있는 무채색 장벽(AI가 그린 격자선)의 최대 두께(px)입니다.
+        /// 배경 픽셀에서 한 방향으로 이 거리까지 <b>무채색만</b> 지나 근사 흰색 배경에 닿으면 그 사이를 배경으로 편입합니다.
+        /// 격자선은 1~3px이므로 셀 사이를 건널 수 있고, 이보다 두꺼운 무채색 덩어리(회색조 캐릭터 몸통 등)는
+        /// 근사 흰색에 닿지 못해 통과하지 못합니다. 유채색 장벽은 두께와 무관하게 통과하지 않습니다.
+        /// <para>
+        /// 이 규칙이 없으면 격자선이 셀마다 배경을 가둬, 외곽에서 닿는 셀만 지워지고 나머지 셀의 배경이 남습니다
+        /// (격자선 min 채널이 실측 133~180까지 내려가 그라데이션 허용 오차·근사 흰색 조건으로는 넘을 수 없음).
+        /// </para>
+        /// </summary>
+        private const int MaxBarrierBridgeThickness = 4;
+
         /// <summary>pocket restore 침식/재팽창 반경(체비쇼프 거리)입니다. 좁은 통로로 샌 제거 영역을 끊어내는 기준.</summary>
         private const int PocketErodeRadius = 2;
 
@@ -1160,6 +1172,8 @@ namespace MCPTools.Editor
         /// <item>min(R,G,B)가 <see cref="BackgroundBridgeMinWhite"/> 이상인 밝은 무채색이고, 현재 픽셀보다 밝으며,
         /// 3x3 윈도 전체가 같은 조건 또는 배경 편입 상태 (격자선 → 배경 안티에일리어싱 램프 통과용)</item>
         /// </list>
+        /// 여기에 더해, 이웃으로는 못 넘는 <b>얇은 무채색 장벽</b>(격자선)은
+        /// <see cref="MaxBarrierBridgeThickness"/>까지 건너뛰어 다음 셀의 배경으로 넘어갑니다.
         /// BFS 후 배경과 인접한 잔여 근사 흰색(무채색) 전경 픽셀을 비전파로 1회 정리하고,
         /// 마지막에 pocket restore로 좁은 틈으로 새어 들어간 제거 영역을 복원합니다.
         /// </summary>
@@ -1184,6 +1198,9 @@ namespace MCPTools.Editor
             }
 
             var visited = new bool[pixels.Length]; // true = 배경 편입됨
+            // 얇은 장벽(격자선)을 건너뛰며 편입한 픽셀. pocket restore에서 연결자로 쓰인다
+            // (침식하면 얇은 다리가 끊겨 셀 배경이 "고립된 pocket"으로 보여 되살아나므로).
+            var bridged = new bool[pixels.Length];
             var queue = new Queue<int>();
 
             void Seed(int x, int y)
@@ -1249,6 +1266,47 @@ namespace MCPTools.Editor
                 queue.Enqueue(nIdx);
             }
 
+            // (x,y)에서 (dx,dy) 방향으로 얇은 무채색 장벽(격자선)을 건너뜁니다.
+            // 최대 MaxBarrierBridgeThickness까지 무채색만 지나 근사 흰색 배경에 닿으면 그 사이 전부를 배경으로 편입합니다.
+            void TryBridgeBarrier(int x, int y, int dx, int dy)
+            {
+                for (int step = 1; step <= MaxBarrierBridgeThickness; step++)
+                {
+                    int qx = x + dx * step;
+                    int qy = y + dy * step;
+                    if (qx < 0 || qx >= width || qy < 0 || qy >= height)
+                    {
+                        return;
+                    }
+
+                    int qIdx = qy * width + qx;
+                    if (!neutral[qIdx])
+                    {
+                        return; // 유채색 장벽 — 캐릭터·이펙트를 넘어가지 않는다
+                    }
+
+                    if (!nearWhite[qIdx] || visited[qIdx])
+                    {
+                        continue; // 아직 장벽 안(또는 이미 배경) — 계속 전진
+                    }
+
+                    // 장벽 건너편 배경에 닿았다. 장벽 픽셀과 그 배경 픽셀을 함께 편입한다.
+                    for (int back = 1; back <= step; back++)
+                    {
+                        int pIdx = (y + dy * back) * width + (x + dx * back);
+                        if (!visited[pIdx])
+                        {
+                            visited[pIdx] = true;
+                            bridged[pIdx] = true;
+                            queue.Enqueue(pIdx);
+                        }
+                    }
+
+                    bridged[y * width + x] = true;
+                    return;
+                }
+            }
+
             // 네 외곽 경계 전체를 시드로 사용 (배경이 순백이 아니어도 시작 가능)
             for (int x = 0; x < width; x++)
             {
@@ -1273,6 +1331,12 @@ namespace MCPTools.Editor
                 if (x < width - 1) TryExpand(idx, x + 1, y);
                 if (y > 0) TryExpand(idx, x, y - 1);
                 if (y < height - 1) TryExpand(idx, x, y + 1);
+
+                // 이웃으로는 못 넘는 얇은 격자선을 네 방향으로 건너뛴다 (셀마다 배경이 갇히는 것 방지).
+                TryBridgeBarrier(x, y, -1, 0);
+                TryBridgeBarrier(x, y, 1, 0);
+                TryBridgeBarrier(x, y, 0, -1);
+                TryBridgeBarrier(x, y, 0, 1);
             }
 
             // 비전파 fringe 정리 1회: 배경과 4방향 인접한 잔여 근사 흰색(무채색) 전경 픽셀을 한 번에 편입
@@ -1302,7 +1366,7 @@ namespace MCPTools.Editor
                 pixels[idx].a = 0;
             }
 
-            RestorePockets(pixels, visited, originalAlpha, width, height);
+            RestorePockets(pixels, visited, bridged, originalAlpha, width, height);
             FeatherEdges(pixels, width, height);
         }
 
@@ -1388,9 +1452,15 @@ namespace MCPTools.Editor
         /// <see cref="PocketErodeRadius"/>(K)로 침식하면 통로가 끊긴다. 침식 마스크 위에서 이미지 외곽으로부터
         /// 도달 가능한 영역(reach)을 구하고 제거 마스크 내부로 정확히 K+1 스텝 재팽창한 뒤,
         /// 제거됐지만 reach가 아닌 픽셀의 알파를 원본 값으로 복원합니다. 큐 기반, 재귀 없음.
+        /// <para>
+        /// <paramref name="bridged"/>(얇은 격자선을 고의로 건너뛰며 편입한 픽셀)는 침식 결과와 함께
+        /// 도달성 판정에 쓰입니다. 격자선은 1~3px이라 침식하면 끊겨, 그 뒤 셀 배경 전체가
+        /// "고립된 pocket"으로 보여 되살아나기 때문입니다. 좁은 틈으로 새어 든 영역은 bridged가 아니므로
+        /// pocket 판정이 그대로 유지됩니다.
+        /// </para>
         /// </summary>
         private static void RestorePockets(
-            Color32[] pixels, bool[] removed, byte[] originalAlpha, int width, int height)
+            Color32[] pixels, bool[] removed, bool[] bridged, byte[] originalAlpha, int width, int height)
         {
             const int k = PocketErodeRadius;
 
@@ -1398,14 +1468,21 @@ namespace MCPTools.Editor
             //    전경 픽셀이 하나라도 있으면 침식 마스크에서 제외
             bool[] eroded = ErodeChebyshev(removed, width, height, k);
 
-            // 2) 외곽 도달성: 네 외곽의 침식 픽셀을 시드로 침식 마스크 위 4방향 BFS → reach
+            // 침식 결과 + 격자선 다리를 도달성 탐색 대상으로 삼는다 (다리가 끊겨 셀이 고립되는 것 방지).
+            var traversable = new bool[removed.Length];
+            for (int i = 0; i < traversable.Length; i++)
+            {
+                traversable[i] = eroded[i] || bridged[i];
+            }
+
+            // 2) 외곽 도달성: 네 외곽의 대상 픽셀을 시드로 4방향 BFS → reach
             var reach = new bool[removed.Length];
             var queue = new Queue<int>();
 
             void SeedReach(int x, int y)
             {
                 int idx = y * width + x;
-                if (eroded[idx] && !reach[idx])
+                if (traversable[idx] && !reach[idx])
                 {
                     reach[idx] = true;
                     queue.Enqueue(idx);
@@ -1429,10 +1506,10 @@ namespace MCPTools.Editor
                 int idx = queue.Dequeue();
                 int x = idx % width;
                 int y = idx / width;
-                if (x > 0 && eroded[idx - 1] && !reach[idx - 1]) { reach[idx - 1] = true; queue.Enqueue(idx - 1); }
-                if (x < width - 1 && eroded[idx + 1] && !reach[idx + 1]) { reach[idx + 1] = true; queue.Enqueue(idx + 1); }
-                if (y > 0 && eroded[idx - width] && !reach[idx - width]) { reach[idx - width] = true; queue.Enqueue(idx - width); }
-                if (y < height - 1 && eroded[idx + width] && !reach[idx + width]) { reach[idx + width] = true; queue.Enqueue(idx + width); }
+                if (x > 0 && traversable[idx - 1] && !reach[idx - 1]) { reach[idx - 1] = true; queue.Enqueue(idx - 1); }
+                if (x < width - 1 && traversable[idx + 1] && !reach[idx + 1]) { reach[idx + 1] = true; queue.Enqueue(idx + 1); }
+                if (y > 0 && traversable[idx - width] && !reach[idx - width]) { reach[idx - width] = true; queue.Enqueue(idx - width); }
+                if (y < height - 1 && traversable[idx + width] && !reach[idx + width]) { reach[idx + width] = true; queue.Enqueue(idx + width); }
             }
 
             // 3) 재팽창: reach를 시작 큐로 제거 마스크 내부로 정확히 K+1 스텝만 레벨 단위 확장
