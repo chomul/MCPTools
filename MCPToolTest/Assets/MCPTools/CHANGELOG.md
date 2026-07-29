@@ -8,6 +8,12 @@
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-07-29
+
+### Fixed
+
+- **Anaconda/Miniconda만 설치된 환경에서 Python 자동 탐지 실패** — conda 설치 관리자는 PATH 등록이 기본 해제이고 Windows `py` 런처도 conda 설치본을 인식하지 못해, conda만 있는 PC에서는 "Python 3.7 이상을 찾지 못했습니다"로 브리지 서버를 시작할 수 없었습니다. 탐지 단계에 conda 설치본 탐색을 추가했습니다 — `CONDA_PREFIX`·`CONDA_EXE` 환경변수, 기본 설치 폴더(`%USERPROFILE%`·`%LOCALAPPDATA%`·`%LOCALAPPDATA%\Continuum`·`%ProgramData%`·`%ProgramFiles%`·드라이브 루트의 `anaconda3`/`miniconda3`/`miniforge3`/`mambaforge`), 그리고 각 루트의 `envs/*`를 순서대로 확인합니다(macOS·Linux는 `~`·`/opt` 아래 `bin/python3`). Python 미탐지 안내 다이얼로그에도 conda 항목을 추가했습니다
+
 ## [0.5.1] - 2026-07-28
 
 ### Added

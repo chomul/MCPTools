@@ -43,7 +43,8 @@
   - 패키지 의존 코드는 별도 어셈블리 `Editor/SpriteSlicing/`(`MCPTools.Editor.SpriteSlicing.asmdef`)에 격리되어 있고 **defineConstraints**(`MCPTOOLS_HAS_2D_SPRITE`)가 걸려 있어, 패키지가 없으면 어셈블리 자체가 컴파일 대상에서 제외됩니다. 따라서 **미설치 시 스프라이트 시트 슬라이싱만 비활성화되고 나머지 기능(1~4단계 전 파이프라인)은 정상 동작**하며, 슬라이싱을 시도하면 설치 안내 메시지가 다이얼로그/도구 오류로 표시됩니다.
 - **Python 3.7 이상** (3단계 생성용) — 브리지 서버(`Editor/ComfyUIGenerator/Server~/bridge_server.py`) 실행에 필요합니다. 표준 라이브러리만 사용하므로 pip 패키지 설치는 필요 없습니다.
   - Windows에서 [python.org](https://www.python.org/downloads/) 설치 시 첫 화면의 **"Add python.exe to PATH"** 체크를 권장합니다.
-  - 실행 파일은 [서버 시작] 시 **자동 탐지**됩니다(설정값 → `py -3`/`python`/`python3` → 표준 설치 폴더 → PATH 순서로 찾아 실제 실행해 3.7 이상인지 검증). 자동 탐지에 실패하면 `Tools/MCP/Settings`의 **Python 실행 파일**에 `python.exe` 절대 경로를 지정하거나 같은 창의 **[Python 자동 탐지]** 버튼을 누르세요.
+  - 실행 파일은 [서버 시작] 시 **자동 탐지**됩니다(설정값 → `py -3`/`python`/`python3` → 표준 설치 폴더 → Anaconda/Miniconda 설치본 → PATH 순서로 찾아 실제 실행해 3.7 이상인지 검증). 자동 탐지에 실패하면 `Tools/MCP/Settings`의 **Python 실행 파일**에 `python.exe` 절대 경로를 지정하거나 같은 창의 **[Python 자동 탐지]** 버튼을 누르세요.
+  - **Anaconda/Miniconda만 설치한 경우에도 별도 설정 없이 동작합니다.** conda는 설치 시 PATH 등록이 기본 해제이고 `py` 런처도 conda 설치본을 인식하지 못하지만, 자동 탐지가 기본 설치 폴더(`%USERPROFILE%\anaconda3` 등)와 `envs/` 하위 환경까지 훑습니다.
 - **ComfyUI 로컬 서버** (3단계 생성용) — 기본 주소 `http://127.0.0.1:8188`, 설정 에셋에서 변경 가능. 1·2단계만 사용할 때는 필요 없습니다.
   - **버전**: 기본 워크플로가 `ReferenceLatent`(UI/StyleChange), `SaveAudioAdvanced`(Audio) 같은 비교적 최근에 추가된 **코어 노드**를 사용합니다. 특정 최소 버전·커밋을 검증한 근거가 없으므로, **이 코어 노드들을 포함하는 최신 버전(2025년 이후 릴리스) 사용을 권장**합니다. 버전이 낮으면 코어 노드가 없어 **커스텀 노드 미설치와 구분되지 않는 "노드 누락" 오류**로 나타납니다. 어떤 노드가 없는지는 생성 전 **사전 검증(preflight)** 이 목록으로 알려주므로(아래 참조), 목록에 나온 이름이 아래 커스텀 노드 목록에 없다면 코어 노드일 가능성이 높으므로 **ComfyUI를 최신 버전으로 업데이트**해보세요.
   - **사전 검증(preflight)**: 3단계 창에서 워크플로를 선택하면 누락된 커스텀 노드가 창 상단에 경고로 표시되고, [생성]을 누르면 제출 전에 누락 노드·ComfyUI에 없는 모델 파일명을 다이얼로그로 안내하고 생성을 중단합니다. ComfyUI에 연결되지 않은 상태에서는 검증이 생략됩니다.
@@ -267,7 +268,7 @@ Unity(BridgeClient) ── HTTP :8189 ──> bridge_server.py ── HTTP :8188
 
 - 상단에 **브리지 서버 상태**와 **ComfyUI 연결 상태**(●, 5초 주기 자동 확인), **[서버 시작] / [서버 종료]** 버튼이 표시됩니다.
 - **[서버 시작]** — Python 3 실행 파일을 **자동 탐지**해 브리지 서버를 실행합니다 (`--port`는 `bridgeServerUrl`의 포트, `--comfy-url`은 `comfyUIServerUrl`).
-  - 탐지 순서: 설정의 `pythonExecutable`(절대 경로면 존재 확인) → `py -3` / `python` / `python3` → Windows 표준 설치 폴더(`%LOCALAPPDATA%\Programs\Python\Python3*`, `%ProgramFiles%\Python3*` 등) → PATH의 각 디렉터리. 각 후보를 실제로 실행해 **Python 3.7 이상**인지 검증하므로 Windows 스토어 앱 실행 별칭 스텁이나 Python 2는 자동으로 걸러집니다. 결과는 세션 단위로 캐시됩니다.
+  - 탐지 순서: 설정의 `pythonExecutable`(절대 경로면 존재 확인) → `py -3` / `python` / `python3` → Windows 표준 설치 폴더(`%LOCALAPPDATA%\Programs\Python\Python3*`, `%ProgramFiles%\Python3*` 등) → **Anaconda/Miniconda 설치본**(`CONDA_PREFIX`·`CONDA_EXE` → `%USERPROFILE%`·`%LOCALAPPDATA%`·`%ProgramData%`·드라이브 루트의 `anaconda3`/`miniconda3`/`miniforge3` 등 → 각 루트의 `envs/*`) → PATH의 각 디렉터리. 각 후보를 실제로 실행해 **Python 3.7 이상**인지 검증하므로 Windows 스토어 앱 실행 별칭 스텁이나 Python 2는 자동으로 걸러집니다. 결과는 세션 단위로 캐시됩니다.
   - Python을 찾지 못하면 설치·PATH·Unity 재시작·스토어 별칭·절대 경로 지정 방법을 담은 안내 다이얼로그가 뜹니다. 시작은 됐지만 서버가 곧바로 죽는 경우(포트 충돌 등)도 종료 코드와 로그 마지막 내용을 포함한 안내가 표시됩니다.
   - **ComfyUI 자체는 별도로 실행해야 합니다.**
 - **[서버 종료]** — 이 도구로 시작한 프로세스 트리를 종료합니다(taskkill /T /F). PID는 SessionState에 저장되어 스크립트 컴파일(도메인 리로드) 후에도 유지됩니다. SessionState는 에디터를 재시작하면 사라지므로, 그 뒤에는 이 버튼이 비활성화됩니다.
@@ -748,9 +749,10 @@ UPM으로 설치한 패키지 폴더(`Packages/...`)는 **읽기 전용**입니�
   1. **Python 미설치 / PATH 미등록** — 터미널에서 `python --version`(또는 `py -3 --version`)이 3.7 이상을 출력하는지 확인하세요. [python.org](https://www.python.org/downloads/) 설치 시 **"Add python.exe to PATH"** 체크를 켜야 합니다.
   2. **Unity 실행 중에 Python을 설치함** — 이미 실행 중인 프로세스는 설치 전의 옛 PATH를 계속 사용합니다. **Unity 에디터와 Unity Hub를 모두 종료했다가 다시 실행**하세요.
   3. **Windows 스토어 앱 실행 별칭** — `python`을 실행하면 Microsoft Store 창만 뜨고 서버가 안 뜨는 경우입니다. **설정 > 앱 > 고급 앱 설정 > 앱 실행 별칭**에서 `python.exe` / `python3.exe`를 끄세요. (도구의 자동 탐지는 이 스텁을 검증 단계에서 걸러내지만, 설정에 스텁 경로를 직접 지정한 경우 문제가 됩니다.)
-  4. **포트 충돌** — 브리지 서버가 시작 직후 종료되면 대부분 `bridgeServerUrl`의 포트(기본 8189)를 이미 다른 프로세스가 쓰고 있는 경우입니다. 이전에 띄운 브리지 콘솔 창을 닫거나 설정에서 포트를 바꾸세요.
-  5. **직접 지정 / 자동 탐지** — `Tools/MCP/Settings`의 **Python 실행 파일**에 `python.exe` 절대 경로를 입력하거나, 같은 창의 **[Python 자동 탐지]** 버튼을 눌러 자동으로 채우세요(찾은 경로와 버전이 다이얼로그로 표시됩니다).
-  6. **로그 확인** — "브리지 콘솔 창 표시"가 꺼져 있으면 서버 로그는 `%TEMP%/mcptools_bridge_server.log`(시스템 임시 폴더)에 기록됩니다. 켜두면 콘솔 창에서 오류를 바로 볼 수 있습니다.
+  4. **Anaconda/Miniconda만 설치함** — conda 설치 관리자는 PATH 등록을 권장하지 않아 기본 해제이고, `py` 런처도 conda 설치본을 인식하지 못합니다. 자동 탐지가 기본 설치 폴더와 `envs/` 하위 환경을 훑으므로 대개 그대로 동작하지만, 기본이 아닌 위치에 설치했다면 아래 5번에서 `<conda 설치 폴더>\python.exe`(예: `%USERPROFILE%\anaconda3\python.exe`)를 직접 지정하세요.
+  5. **포트 충돌** — 브리지 서버가 시작 직후 종료되면 대부분 `bridgeServerUrl`의 포트(기본 8189)를 이미 다른 프로세스가 쓰고 있는 경우입니다. 이전에 띄운 브리지 콘솔 창을 닫거나 설정에서 포트를 바꾸세요.
+  6. **직접 지정 / 자동 탐지** — `Tools/MCP/Settings`의 **Python 실행 파일**에 `python.exe` 절대 경로를 입력하거나, 같은 창의 **[Python 자동 탐지]** 버튼을 눌러 자동으로 채우세요(찾은 경로와 버전이 다이얼로그로 표시됩니다).
+  7. **로그 확인** — "브리지 콘솔 창 표시"가 꺼져 있으면 서버 로그는 `%TEMP%/mcptools_bridge_server.log`(시스템 임시 폴더)에 기록됩니다. 켜두면 콘솔 창에서 오류를 바로 볼 수 있습니다.
 - **브리지 서버는 실행 중인데 ComfyUI 미연결** — ComfyUI 자체는 브리지가 실행해주지 않습니다. ComfyUI를 별도로 실행한 뒤 상태 표시가 갱신될 때까지 잠시 기다리세요.
 - **"생성 사전 검증 실패" 다이얼로그 (커스텀 노드·모델 누락)** — 생성 전 preflight가 현재 ComfyUI 환경에서 실행할 수 없는 워크플로를 걸러낸 것입니다.
   - **설치되지 않은 커스텀 노드 N개** — 목록의 노드를 [ComfyUI-Manager](https://github.com/ltdrdata/ComfyUI-Manager)로 설치하고 ComfyUI를 재시작하세요. 목록에 나온 이름이 `ComfyUI-Inspyrenet-Rembg`/`ComfySwitchNode` 계열이 아니라면 **ComfyUI 코어 노드**일 수 있으니 ComfyUI를 최신 버전으로 업데이트해보세요 (위 [요구 사항](#요구-사항)의 버전 항목 참조).
@@ -767,7 +769,7 @@ UPM으로 설치한 패키지 폴더(`Packages/...`)는 **읽기 전용**입니�
   - **요청 본문 상한 1 MiB** — 참조 이미지를 싣는 `POST /upload`만 예외로 64 MiB까지 허용합니다. `Content-Length` 헤더가 없거나 숫자가 아닌 요청도 400으로 거부합니다.
 - **macOS·Linux에서 쓸 때 (미검증)** — 이 도구는 **Windows 10/11에서만 검증**했습니다. 아래 두 지점이 Windows를 전제로 구현되어 있으니, 다른 OS에서 문제가 생기면 여기부터 확인하세요. 두 경로 모두 실제 장비에서 시험하지 않았으므로 **동작을 보장하지 않습니다.**
   - **브리지 서버 종료** — Windows에서는 `taskkill /PID /T /F`로 프로세스 트리를 통째로 종료합니다(콘솔 창으로 띄운 python 자식 프로세스까지). 그 외 OS에서는 시작한 프로세스 하나만 종료하므로 **자식 python 프로세스가 남을 수 있습니다.** 브리지가 계속 살아 있으면 콘솔에서 직접 실행·종료(Ctrl+C)하거나, 이 세션이 시작하지 않은 서버에 나타나는 **[원격 종료]**(HTTP `POST /shutdown`, OS 무관)를 사용하세요.
-  - **Python 자동 탐지 경로** — Windows에서는 표준 설치 폴더(`%LOCALAPPDATA%\Programs\Python`, `%ProgramFiles%`, `SystemDrive` 루트)까지 훑습니다. 그 외 OS에서는 `py -3`/`python`/`python3`와 `/usr/bin/python3`·`/usr/local/bin/python3`·`/opt/homebrew/bin/python3`, PATH만 봅니다. 자동 탐지가 실패하면 `Tools/MCP/Settings`의 **Python 실행 파일**에 절대 경로를 직접 지정하세요.
+  - **Python 자동 탐지 경로** — Windows에서는 표준 설치 폴더(`%LOCALAPPDATA%\Programs\Python`, `%ProgramFiles%`, `SystemDrive` 루트)와 conda 설치본(`%USERPROFILE%\anaconda3\python.exe` 등)까지 훑습니다. 그 외 OS에서는 `py -3`/`python`/`python3`와 `/usr/bin/python3`·`/usr/local/bin/python3`·`/opt/homebrew/bin/python3`, conda 설치본(`~/anaconda3/bin/python3`·`/opt/miniconda3/bin/python3` 등), PATH를 봅니다. 자동 탐지가 실패하면 `Tools/MCP/Settings`의 **Python 실행 파일**에 절대 경로를 직접 지정하세요.
 
 ## 버전과 라이선스
 

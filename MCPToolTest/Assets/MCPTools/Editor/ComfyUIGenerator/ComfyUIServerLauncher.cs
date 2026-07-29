@@ -383,7 +383,8 @@ namespace MCPTools.Editor
         /// <summary>
         /// 사용할 Python 3 실행 파일을 탐지합니다. 후보를 순서대로 만들고 각 후보를 실제로 실행해
         /// 3.7 이상인지 검증한 뒤 첫 성공 후보를 반환합니다(Windows 스토어 별칭 스텁·Python 2는 검증에서 탈락).
-        /// 탐지 순서: 설정값 → 명령어 이름(py -3 / python / python3) → 잘 알려진 설치 폴더 → PATH 디렉터리 → 표준 경로.
+        /// 탐지 순서: 설정값 → 명령어 이름(py -3 / python / python3) → 잘 알려진 설치 폴더 →
+        /// Anaconda/Miniconda 설치본 → PATH 디렉터리 → 표준 경로.
         /// 결과는 SessionState에 캐시되며, 설정의 Python 실행 파일이 바뀌면 캐시를 무시합니다.
         /// </summary>
         /// <param name="settings">Python 실행 파일 설정이 담긴 설정 객체(null 허용).</param>
@@ -474,7 +475,10 @@ namespace MCPTools.Editor
                                "실행 중인 프로세스는 설치 전의 옛 PATH 환경변수를 계속 사용합니다.");
             message.AppendLine("3. Windows에서 python을 실행하면 Microsoft Store 창만 뜨는 경우: " +
                                "설정 > 앱 > 고급 앱 설정 > 앱 실행 별칭에서 python.exe / python3.exe 항목을 끄세요.");
-            message.AppendLine("4. 그래도 안 되면 Tools/MCP/Settings의 \"Python 실행 파일\"에 python.exe의 절대 경로를 직접 입력하세요 " +
+            message.AppendLine("4. Anaconda/Miniconda만 설치한 경우: conda는 설치 시 PATH에 등록하지 않는 것이 기본이라 " +
+                               "python 명령이 인식되지 않습니다. 기본 설치 폴더는 자동으로 찾지만 다른 위치에 설치했다면 " +
+                               "아래 5번에서 conda 폴더의 python.exe 경로를 직접 지정하세요 (예: %USERPROFILE%\\anaconda3\\python.exe).");
+            message.AppendLine("5. 그래도 안 되면 Tools/MCP/Settings의 \"Python 실행 파일\"에 python.exe의 절대 경로를 직접 입력하세요 " +
                                "(예: %LOCALAPPDATA%\\Programs\\Python\\Python312\\python.exe). 같은 창의 [자동 탐지] 버튼으로 채울 수도 있습니다.");
 
             if (!string.IsNullOrEmpty(diagnostics))
@@ -761,10 +765,15 @@ namespace MCPTools.Editor
                 AddInstalledPythonCandidates(candidates, seen, DriveRoot(Environment.GetEnvironmentVariable("SystemDrive")));
             }
 
-            // 4) PATH 환경변수 직접 파싱 → 절대 경로 후보
+            // 4) Anaconda/Miniconda 설치본
+            //    conda 설치 관리자는 PATH 등록이 기본 해제이고 py 런처도 conda 설치본을 인식하지 못하므로,
+            //    conda만 설치된 환경에서는 위 1~3번이 모두 탈락한다.
+            AddCondaCandidates(candidates, seen);
+
+            // 5) PATH 환경변수 직접 파싱 → 절대 경로 후보
             AddPathEnvironmentCandidates(candidates, seen);
 
-            // 5) Windows 외 표준 경로
+            // 6) Windows 외 표준 경로
             if (!IsWindows)
             {
                 AddFileCandidate(candidates, seen, "/usr/bin/python3");
@@ -828,6 +837,142 @@ namespace MCPTools.Editor
             }
         }
 
+        /// <summary>
+        /// Anaconda/Miniconda/Miniforge 설치 루트에서 python 실행 파일을 후보로 추가합니다.
+        /// conda 설치 관리자는 PATH 등록을 권장하지 않아 기본 해제이고, Windows의 py 런처도
+        /// conda 설치본을 인식하지 못하므로 conda만 설치된 환경에서는 이 탐색이 유일한 경로입니다.
+        /// 활성 환경(CONDA_PREFIX)·conda 실행 파일 위치(CONDA_EXE) → 기본 설치 폴더 순으로 base 환경을 먼저 보고,
+        /// base가 3.7 미만이거나 없을 때를 대비해 각 루트의 <c>envs/*</c>를 뒤이어 추가합니다.
+        /// (드라이브 문자·사용자명 하드코딩 없이 환경변수와 특수 폴더 경로만 사용합니다.)
+        /// </summary>
+        private static void AddCondaCandidates(List<KeyValuePair<string, string>> candidates, HashSet<string> seen)
+        {
+            var roots = new List<string>();
+            var rootSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+            // (1) 지금 활성화된 conda 환경과 conda 실행 파일 위치에서 역산한 설치 루트.
+            //     Unity를 conda 셸에서 실행한 경우 이 둘만으로 바로 찾을 수 있다.
+            AddCondaRoot(roots, rootSeen, Environment.GetEnvironmentVariable("CONDA_PREFIX"));
+            AddCondaRoot(roots, rootSeen, GrandparentDirectory(Environment.GetEnvironmentVariable("CONDA_EXE")));
+
+            // (2) 설치 관리자가 기본으로 제안하는 폴더들.
+            foreach (string parent in CondaParentDirectories())
+            {
+                foreach (string name in CondaRootNames)
+                {
+                    AddCondaRoot(roots, rootSeen, CombineSafe(parent, name));
+                }
+            }
+
+            // (3) base 환경을 먼저 전부 추가한 뒤 envs 하위 환경을 추가한다 (base 우선).
+            foreach (string root in roots)
+            {
+                AddFileCandidate(candidates, seen, CondaPythonPath(root));
+            }
+
+            foreach (string root in roots)
+            {
+                string envsDirectory = CombineSafe(root, "envs");
+                if (string.IsNullOrEmpty(envsDirectory) || !Directory.Exists(envsDirectory))
+                {
+                    continue;
+                }
+
+                string[] environments;
+                try
+                {
+                    environments = Directory.GetDirectories(envsDirectory);
+                }
+                catch (Exception)
+                {
+                    // 접근 권한 없음 등 — 조용히 건너뜀
+                    continue;
+                }
+
+                Array.Sort(environments, StringComparer.OrdinalIgnoreCase);
+                foreach (string environment in environments)
+                {
+                    AddFileCandidate(candidates, seen, CondaPythonPath(environment));
+                }
+            }
+        }
+
+        /// <summary>conda 설치 폴더에 흔히 쓰이는 이름들입니다 (대소문자가 다른 구버전 설치 포함).</summary>
+        private static readonly string[] CondaRootNames =
+        {
+            "anaconda3", "miniconda3", "miniforge3", "mambaforge",
+            "Anaconda3", "Miniconda3", "Miniforge3"
+        };
+
+        /// <summary>conda 설치 루트가 놓이는 상위 폴더들을 플랫폼별로 돌려줍니다.</summary>
+        private static IEnumerable<string> CondaParentDirectories()
+        {
+            string userProfile = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+
+            if (!IsWindows)
+            {
+                return new[] { userProfile, "/opt" };
+            }
+
+            string localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+            return new[]
+            {
+                userProfile,                                        // 기본값: %USERPROFILE%\anaconda3
+                localAppData,                                       // "Just Me" 설치 일부 버전
+                CombineSafe(localAppData, "Continuum"),             // 구버전 Anaconda
+                Environment.GetEnvironmentVariable("ProgramData"),  // "All Users" 설치
+                Environment.GetEnvironmentVariable("ProgramFiles"),
+                DriveRoot(Environment.GetEnvironmentVariable("SystemDrive"))
+            };
+        }
+
+        /// <summary>conda 환경 폴더 안의 python 실행 파일 경로를 만듭니다 (Windows는 루트 바로 아래, 그 외는 bin/).</summary>
+        private static string CondaPythonPath(string root)
+        {
+            if (string.IsNullOrEmpty(root))
+            {
+                return string.Empty;
+            }
+
+            return IsWindows
+                ? CombineSafe(root, "python.exe")
+                : CombineSafe(CombineSafe(root, "bin"), "python3");
+        }
+
+        /// <summary>실제로 존재하는 conda 루트만 중복 없이 목록에 추가합니다.</summary>
+        private static void AddCondaRoot(List<string> roots, HashSet<string> rootSeen, string root)
+        {
+            if (string.IsNullOrEmpty(root) || !Directory.Exists(root))
+            {
+                return;
+            }
+
+            if (rootSeen.Add(root.TrimEnd('/', '\\')))
+            {
+                roots.Add(root);
+            }
+        }
+
+        /// <summary>"&lt;루트&gt;/Scripts/conda.exe"처럼 두 단계 아래 있는 파일에서 설치 루트를 역산합니다.</summary>
+        private static string GrandparentDirectory(string filePath)
+        {
+            if (string.IsNullOrEmpty(filePath))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                string parent = Path.GetDirectoryName(filePath);
+                return string.IsNullOrEmpty(parent) ? string.Empty : (Path.GetDirectoryName(parent) ?? string.Empty);
+            }
+            catch (ArgumentException)
+            {
+                // 잘못된 문자가 섞인 환경변수 값 — 건너뜀
+                return string.Empty;
+            }
+        }
+
         /// <summary>PATH 환경변수의 각 디렉터리에서 python 실행 파일을 찾아 절대 경로 후보로 추가합니다.</summary>
         private static void AddPathEnvironmentCandidates(List<KeyValuePair<string, string>> candidates, HashSet<string> seen)
         {
@@ -864,6 +1009,25 @@ namespace MCPTools.Editor
 
                     AddFileCandidate(candidates, seen, fullPath);
                 }
+            }
+        }
+
+        /// <summary>두 조각을 이어 경로를 만듭니다 (조각이 비었거나 잘못된 문자가 섞였으면 빈 문자열).</summary>
+        private static string CombineSafe(string root, string child)
+        {
+            if (string.IsNullOrEmpty(root) || string.IsNullOrEmpty(child))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                return Path.Combine(root, child);
+            }
+            catch (ArgumentException)
+            {
+                // 환경변수에 잘못된 경로 문자가 섞인 경우 — 건너뜀
+                return string.Empty;
             }
         }
 
