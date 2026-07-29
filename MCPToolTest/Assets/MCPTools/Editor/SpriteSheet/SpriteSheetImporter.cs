@@ -230,6 +230,16 @@ namespace MCPTools.Editor
         /// </summary>
         public const int MaxBackgroundSaturation = 18;
 
+        /// <summary>
+        /// 배경 BFS가 밝기 계단을 건너뛸 수 있는 밝은 무채색의 최소 min(R,G,B)입니다.
+        /// AI가 그린 격자선(회색)과 흰 배경 사이에는 1~2px 안티에일리어싱 램프(예: 159 → 216 → 252)가 생기는데,
+        /// 그 중간값은 <see cref="BackgroundGradientTolerance"/>를 넘고 <see cref="NearWhiteThreshold"/>에는 못 미쳐
+        /// 어느 조건도 통과하지 못해 BFS가 외곽선에 갇히고 배경이 통째로 남는다.
+        /// 이 값 이상의 밝은 무채색이면 <b>밝아지는 방향으로만</b> 한 계단 건너뛸 수 있게 해 램프를 통과시킨다.
+        /// (밝아지는 방향으로만 허용하므로 흰 배경에서 더 어두운 캐릭터 픽셀로 번지지 않는다.)
+        /// </summary>
+        private const int BackgroundBridgeMinWhite = 185;
+
         /// <summary>pocket restore 침식/재팽창 반경(체비쇼프 거리)입니다. 좁은 통로로 샌 제거 영역을 끊어내는 기준.</summary>
         private const int PocketErodeRadius = 2;
 
@@ -1147,23 +1157,29 @@ namespace MCPTools.Editor
         /// <item>현재 픽셀과의 채널별 최대 차가 <see cref="BackgroundGradientTolerance"/> 이하 (그라데이션·격자선 추종), 또는</item>
         /// <item>min(R,G,B)가 <see cref="NearWhiteThreshold"/> 이상(근사 흰색)이고, 그 픽셀의 3x3 윈도(8방향+자신, 경계 밖 무시)
         /// 전체가 근사 흰색 또는 이미 배경 편입 상태 (좁은 틈으로 캐릭터 내부에 새는 것 차단)</item>
+        /// <item>min(R,G,B)가 <see cref="BackgroundBridgeMinWhite"/> 이상인 밝은 무채색이고, 현재 픽셀보다 밝으며,
+        /// 3x3 윈도 전체가 같은 조건 또는 배경 편입 상태 (격자선 → 배경 안티에일리어싱 램프 통과용)</item>
         /// </list>
         /// BFS 후 배경과 인접한 잔여 근사 흰색(무채색) 전경 픽셀을 비전파로 1회 정리하고,
         /// 마지막에 pocket restore로 좁은 틈으로 새어 들어간 제거 영역을 복원합니다.
         /// </summary>
         private static void RemoveWhiteBackground(Color32[] pixels, int width, int height)
         {
-            // 근사 흰색/무채색 여부 사전 계산 (픽셀당 1회) + pocket restore용 원본 알파 스냅샷
+            // 근사 흰색/무채색/밝은 무채색 여부 사전 계산 (픽셀당 1회) + pocket restore용 원본 알파 스냅샷
             var nearWhite = new bool[pixels.Length];
             var neutral = new bool[pixels.Length];
+            var brightNeutral = new bool[pixels.Length];
+            var minChannel = new byte[pixels.Length];
             var originalAlpha = new byte[pixels.Length];
             for (int i = 0; i < pixels.Length; i++)
             {
                 Color32 c = pixels[i];
-                nearWhite[i] = c.r >= NearWhiteThreshold && c.g >= NearWhiteThreshold && c.b >= NearWhiteThreshold;
                 int maxCh = Mathf.Max(c.r, Mathf.Max(c.g, c.b));
                 int minCh = Mathf.Min(c.r, Mathf.Min(c.g, c.b));
+                minChannel[i] = (byte)minCh;
+                nearWhite[i] = minCh >= NearWhiteThreshold;
                 neutral[i] = maxCh - minCh <= MaxBackgroundSaturation;
+                brightNeutral[i] = neutral[i] && minCh >= BackgroundBridgeMinWhite;
                 originalAlpha[i] = c.a;
             }
 
@@ -1182,8 +1198,9 @@ namespace MCPTools.Editor
                 queue.Enqueue(idx);
             }
 
-            // 근사 흰색 픽셀의 3x3 윈도(경계 밖 무시) 전체가 근사 흰색 또는 배경 편입인지 확인
-            bool WindowAllWhiteOrBackground(int cx, int cy)
+            // 픽셀의 3x3 윈도(경계 밖 무시) 전체가 mask 조건을 만족하거나 이미 배경 편입인지 확인
+            // (좁은 틈으로 캐릭터 내부에 새는 것을 막는 가드)
+            bool WindowAllOrBackground(bool[] mask, int cx, int cy)
             {
                 int xMin = Mathf.Max(0, cx - 1);
                 int xMax = Mathf.Min(width - 1, cx + 1);
@@ -1195,7 +1212,7 @@ namespace MCPTools.Editor
                     for (int wx = xMin; wx <= xMax; wx++)
                     {
                         int wIdx = row + wx;
-                        if (!nearWhite[wIdx] && !visited[wIdx])
+                        if (!mask[wIdx] && !visited[wIdx])
                         {
                             return false;
                         }
@@ -1205,7 +1222,7 @@ namespace MCPTools.Editor
                 return true;
             }
 
-            void TryExpand(Color32 current, int nx, int ny)
+            void TryExpand(int currentIdx, int nx, int ny)
             {
                 int nIdx = ny * width + nx;
                 if (visited[nIdx] || !neutral[nIdx]) // 유채색(글로우 이펙트 등)은 배경 편입 금지
@@ -1213,11 +1230,17 @@ namespace MCPTools.Editor
                     return;
                 }
 
+                Color32 current = pixels[currentIdx];
                 Color32 n = pixels[nIdx];
                 int diff = Mathf.Max(
                     Mathf.Abs(current.r - n.r), Mathf.Abs(current.g - n.g), Mathf.Abs(current.b - n.b));
-                if (diff > BackgroundGradientTolerance &&
-                    !(nearWhite[nIdx] && WindowAllWhiteOrBackground(nx, ny)))
+                bool accepted =
+                    diff <= BackgroundGradientTolerance || // 그라데이션·격자선 추종
+                    (nearWhite[nIdx] && WindowAllOrBackground(nearWhite, nx, ny)) || // 순백 배경으로 진입
+                    // 격자선 → 배경 안티에일리어싱 램프를 밝아지는 방향으로만 한 계단 건너뜀
+                    (brightNeutral[nIdx] && minChannel[nIdx] >= minChannel[currentIdx] &&
+                     WindowAllOrBackground(brightNeutral, nx, ny));
+                if (!accepted)
                 {
                     return;
                 }
@@ -1242,15 +1265,14 @@ namespace MCPTools.Editor
             while (queue.Count > 0)
             {
                 int idx = queue.Dequeue();
-                Color32 current = pixels[idx];
                 pixels[idx].a = 0;
 
                 int x = idx % width;
                 int y = idx / width;
-                if (x > 0) TryExpand(current, x - 1, y);
-                if (x < width - 1) TryExpand(current, x + 1, y);
-                if (y > 0) TryExpand(current, x, y - 1);
-                if (y < height - 1) TryExpand(current, x, y + 1);
+                if (x > 0) TryExpand(idx, x - 1, y);
+                if (x < width - 1) TryExpand(idx, x + 1, y);
+                if (y > 0) TryExpand(idx, x, y - 1);
+                if (y < height - 1) TryExpand(idx, x, y + 1);
             }
 
             // 비전파 fringe 정리 1회: 배경과 4방향 인접한 잔여 근사 흰색(무채색) 전경 픽셀을 한 번에 편입

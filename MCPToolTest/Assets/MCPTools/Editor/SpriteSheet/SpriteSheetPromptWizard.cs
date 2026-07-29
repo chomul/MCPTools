@@ -16,7 +16,7 @@ namespace MCPTools.Editor
     public class SpriteSheetPromptWizard : EditorWindow
     {
         private static readonly string[] ActionLabels = { "걷기 (walk)", "달리기 (run)", "공격 (attack)", "대기 (idle)", "사망 (death)", "직접 입력..." };
-        private static readonly string[] DirectionLabels = { "오른쪽 (RIGHT)", "왼쪽 (LEFT)" };
+        private static readonly string[] DirectionLabels = { "오른쪽 (RIGHT)", "왼쪽 (LEFT)", "정면 (FRONT)" };
         private static readonly string[] BackgroundLabels = { "흰색 단색 (임포트 시 제거)", "투명" };
 
         /// <summary>검출 결과 표에서 동작명을 채워 넣는 프리셋 선택 목록입니다. (0번은 선택 안 함)</summary>
@@ -45,7 +45,7 @@ namespace MCPTools.Editor
         private string _extraNotes = string.Empty;
         private List<RowEntry> _rows;
         private int _cellSize = 256;
-        private int _directionIndex; // 0=RIGHT
+        private int _directionIndex; // DirectionLabels 인덱스 (0=RIGHT, 1=LEFT, 2=FRONT) — SpriteSheetFacing과 순서 일치
         private int _backgroundIndex; // 0=흰색
 
         // AI CLI 연동 상태
@@ -204,7 +204,10 @@ namespace MCPTools.Editor
 
                 EditorGUILayout.Space(4f);
                 _cellSize = Mathf.Max(32, EditorGUILayout.IntField("셀 크기 (px)", _cellSize));
-                _directionIndex = EditorGUILayout.Popup("바라보는 방향", _directionIndex, DirectionLabels);
+                _directionIndex = EditorGUILayout.Popup(
+                    new GUIContent("바라보는 방향",
+                        "오른쪽/왼쪽은 측면(side view) 시트로, 정면은 카메라를 바라보는 front view 시트로 프롬프트가 조립됩니다."),
+                    _directionIndex, DirectionLabels);
                 _backgroundIndex = EditorGUILayout.Popup("배경", _backgroundIndex, BackgroundLabels);
 
                 EditorGUILayout.Space(6f);
@@ -389,6 +392,12 @@ namespace MCPTools.Editor
             return defs;
         }
 
+        /// <summary>방향 드롭다운 선택값을 <see cref="SpriteSheetFacing"/>으로 바꿉니다. (인덱스 순서가 enum과 일치)</summary>
+        private SpriteSheetFacing CurrentFacing()
+        {
+            return (SpriteSheetFacing)Mathf.Clamp(_directionIndex, 0, DirectionLabels.Length - 1);
+        }
+
         /// <summary>템플릿 방식으로 프롬프트를 생성·저장합니다. (빠른 생성 경로 및 AI 실패 시 폴백)</summary>
         /// <param name="fallbackReason">AI 폴백으로 호출된 경우 그 사유 (안내 문구에 포함). null이면 일반 템플릿 생성.</param>
         private void GeneratePrompt(string fallbackReason = null)
@@ -396,14 +405,14 @@ namespace MCPTools.Editor
             try
             {
                 List<SpriteSheetRowDef> rows = BuildRowDefs();
-                bool faceRight = _directionIndex == 0;
+                SpriteSheetFacing facing = CurrentFacing();
                 bool whiteBackground = _backgroundIndex == 0;
 
                 _prompt = SpriteSheetPromptBuilder.BuildPrompt(
-                    _useReferenceImage, _characterDescription, rows, _cellSize, faceRight, whiteBackground,
+                    _useReferenceImage, _characterDescription, rows, _cellSize, facing, whiteBackground,
                     _gameGenre, _artStyle, _extraNotes);
                 _savedPromptPath = SpriteSheetPromptBuilder.SavePromptJson(
-                    _useReferenceImage, _characterDescription, rows, _cellSize, faceRight, whiteBackground, _prompt,
+                    _useReferenceImage, _characterDescription, rows, _cellSize, facing, whiteBackground, _prompt,
                     _gameGenre, _artStyle, _extraNotes, "template");
 
                 _aiStatusMessage = fallbackReason == null
@@ -435,13 +444,13 @@ namespace MCPTools.Editor
 
             string metaPrompt;
             List<SpriteSheetRowDef> rows;
-            bool faceRight = _directionIndex == 0;
+            SpriteSheetFacing facing = CurrentFacing();
             bool whiteBackground = _backgroundIndex == 0;
             try
             {
                 rows = BuildRowDefs();
                 metaPrompt = SpriteSheetPromptBuilder.BuildMetaPrompt(
-                    _useReferenceImage, _characterDescription, rows, _cellSize, faceRight, whiteBackground,
+                    _useReferenceImage, _characterDescription, rows, _cellSize, facing, whiteBackground,
                     _gameGenre, _artStyle, _extraNotes);
             }
             catch (Exception e)
@@ -496,7 +505,7 @@ namespace MCPTools.Editor
             {
                 _prompt = cleaned;
                 _savedPromptPath = SpriteSheetPromptBuilder.SavePromptJson(
-                    _useReferenceImage, _characterDescription, rows, _cellSize, faceRight, whiteBackground, _prompt,
+                    _useReferenceImage, _characterDescription, rows, _cellSize, facing, whiteBackground, _prompt,
                     _gameGenre, _artStyle, _extraNotes, $"ai-cli:{tool.command}");
                 _aiStatusMessage = $"AI({tool.displayName})로 프롬프트를 생성했습니다.";
             }

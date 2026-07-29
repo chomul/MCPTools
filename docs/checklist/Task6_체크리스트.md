@@ -93,6 +93,14 @@
   - (3) 텍스처 임포트 설정 — `ApplySpriteSlices`에 `maxTextureSize=8192`(원해상도), `textureCompression=CompressedHQ`(알파 그라데이션·글로우 품질), `spriteMeshType=FullRect`(투명 타이트 메시 클리핑 방지), `spriteGenerateFallbackPhysicsShape=false`(경량), `wrap=Clamp`/`filter=Bilinear` 적용.
   - 관련 파일: SpriteSheetImporter.cs, SpriteSheetTool.cs, Common/McpForUnityAdapter.cs
 
+- [x] (2026-07-29 확정·중요) **흰 배경 제거 간헐 실패 수정** — 같은 설정·같은 생성기인데 어떤 시트는 배경이 통째로 남던 문제. 원인: 프롬프트가 "가장 바깥 격자선 = 이미지 가장자리"를 요구해 외곽 시드가 격자선(회색)에서 시작하는데, 격자선과 흰 배경 사이 안티에일리어싱 1픽셀(실측 min 채널 159 → **216** → 252)이 그라데이션 허용 오차(16)를 넘으면서 근사 흰색 기준(235)에도 못 미쳐 어느 조건도 통과하지 못함 → flood-fill이 가장자리 선에 갇힘. 수정: 밝은 무채색(min ≥ `BackgroundBridgeMinWhite`=185)이면서 **현재 픽셀보다 밝은** 이웃으로 한 계단 건너뛸 수 있는 3번째 조건 추가(3x3 윈도 가드는 동일 적용). 밝아지는 방향으로만 허용해 배경→어두운 캐릭터 방향 번짐은 원천 차단. 유채색 차단(글로우 보존)·fringe 정리·pocket restore·페더링은 그대로.
+  - 검증 상태: 실제 알고리즘을 그대로 포팅해 실측 — 실패 시트(`ChatGPT Image 2026년 7월 29일 오후 09_32_50.png`) 제거율 **0.5% → 41.5%**(그 시트의 근사 흰색 비율 42%와 일치 = 배경 전체 제거), 기존 정상 시트 4종은 77.7→78.0 / 68.6→69.1 / 70.7→70.8 / 79.8→80.2%로 **+0.5% 이내**. 새로 지워진 픽셀 중 유채색 0개, min<185 어두운 픽셀 0개. 제거 마스크를 자홍색으로 칠한 미리보기로 캐릭터·글로우 이펙트 무손상 육안 확인. Unity Roslyn으로 `MCPTools.Editor`/`.McpForUnity`/`.Tests` 3개 어셈블리 클린 컴파일.
+  - 관련 파일: MCPToolTest/Assets/MCPTools/Editor/SpriteSheet/SpriteSheetImporter.cs
+
+- [x] (2026-07-29 확정) **바라보는 방향에 정면(FRONT) 추가** — 기존 `bool faceRight`(2값)로는 정면을 표현할 수 없어 `SpriteSheetFacing`(Right/Left/Front) enum으로 교체. 정면 선택 시 "2D side-scrolling sprite sheet" → "2D sprite sheet", "orthographic side-view" → "orthographic front-view", 방향 문장은 "face FORWARD, directly toward the viewer ... no profile, no three-quarter angle"로 바뀌고, walk/run 연출 지시도 "side-walk" 대신 "walking/running toward the viewer"로 조립됨. AI CLI 메타 프롬프트에는 시점·방향을 바꾸지 말라는 규칙 추가. 저장 JSON `answers.direction`은 `right`/`left`/`front`. MCP `direction` 파라미터는 `front`(`forward` 허용) 수용.
+  - 검증 상태: Unity Roslyn 클린 컴파일. 창 드롭다운(오른쪽/왼쪽/정면) 인덱스와 enum 순서 일치, 툴팁 추가. 실제 프롬프트 문구·생성 결과는 아래 에디터 테스트 항목으로 확인 필요.
+  - 관련 파일: SpriteSheetPromptBuilder.cs, SpriteSheetPromptWizard.cs, SpriteSheetTool.cs, McpForUnityBridge/McpForUnityAdapter.cs
+
 ## 2. 에디터 테스트 체크리스트 (사용자가 Unity 에디터에서 직접 확인)
 
 - [ ] `Tools/MCP/Sprite Sheet` 창에서 행 목록 편집(추가/삭제/프리셋/직접 입력) → 멀티 행 프롬프트 미리보기·클립보드 복사 동작
@@ -110,3 +118,8 @@
 - [ ] (실측 개선) 배경 그라데이션 + 격자선이 있는 실제 ChatGPT 시트(`Assets/ChatGPT Image 2026년 7월 23일 오후 04_12_54.png`)가 배경 제거·행/프레임 검출에 성공함
 - [ ] (실측 개선) 행별 프레임 수가 기대와 다를 때 "행별 검출 결과: ... (기대: ...)" 요약 + [검출된 구성으로 임포트]/[취소] 다이얼로그가 표시되고, 채택 시 검출 구성대로 슬라이스(`walk_01`~`walk_10` 등)가 적용됨
 - [ ] (실측 개선) MCP import에서 allowDetected=false면 검출 요약 포함 실패, true면 검출 구성으로 임포트되고 결과에 기대/검출 구성이 모두 포함됨
+- [ ] (2026-07-29) **바라보는 방향 = 정면(FRONT)** 으로 프롬프트를 생성하면 미리보기에 `orthographic front-view` / `face FORWARD, directly toward the viewer` / `walking toward the viewer` 문구가 들어가고, 저장 JSON의 `answers.direction`이 `front`로 기록됨
+- [ ] (2026-07-29) 정면 프롬프트로 외부 AI에서 생성한 시트가 실제로 정면을 바라보는지 확인 (측면으로 나오면 프롬프트 문구 보강 필요)
+- [ ] (2026-07-29) 오른쪽/왼쪽 선택 시 기존과 동일하게 `orthographic side-view` / `face RIGHT|LEFT` / `side-walk` 문구가 유지됨 (회귀 확인)
+- [ ] (2026-07-29) **배경 제거 실패 재현 시트**(`ChatGPT Image 2026년 7월 29일 오후 09_32_50.png` 등, 가장자리 격자선이 회색인 시트)를 [배경 제거 + 격자 검출]에 넣으면 배경이 전부 투명해지고 캐릭터·글로우 이펙트가 남아 있음
+- [ ] (2026-07-29) 기존에 정상 처리되던 시트들을 다시 임포트해도 캐릭터 내부 흰색·밝은 회색 부분이 추가로 파이지 않음 (회귀 확인)

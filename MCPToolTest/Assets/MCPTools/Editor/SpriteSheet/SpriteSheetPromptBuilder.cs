@@ -6,6 +6,19 @@ using UnityEditor;
 
 namespace MCPTools.Editor
 {
+    /// <summary>스프라이트 시트에서 캐릭터가 바라보는 방향입니다.</summary>
+    public enum SpriteSheetFacing
+    {
+        /// <summary>오른쪽 측면 (side view).</summary>
+        Right = 0,
+
+        /// <summary>왼쪽 측면 (side view).</summary>
+        Left = 1,
+
+        /// <summary>정면 — 카메라(플레이어) 쪽을 바라보는 front view.</summary>
+        Front = 2
+    }
+
     /// <summary>스프라이트 시트의 동작 행(Row) 정의입니다. (동작명 + 프레임 수)</summary>
     [Serializable]
     public sealed class SpriteSheetRowDef
@@ -97,7 +110,7 @@ namespace MCPTools.Editor
         /// <param name="characterDescription">캐릭터 특징 서술(선택). 레퍼런스 미사용 시에는 캐릭터 설명(필수).</param>
         /// <param name="rows">동작 행 목록 (1개 이상).</param>
         /// <param name="cellSize">프레임 셀 크기(px, 기본 256).</param>
-        /// <param name="faceRight">true면 RIGHT, false면 LEFT를 바라보게 지시합니다.</param>
+        /// <param name="facing">캐릭터가 바라보는 방향 (Right/Left 측면, Front 정면). 시점(side view/front view) 문구도 함께 바뀝니다.</param>
         /// <param name="whiteBackground">true면 흰색 단색 배경(임포트 시 제거 전제), false면 투명 배경 지시.</param>
         /// <param name="gameGenre">게임 장르(선택, 자유 텍스트, 예: "side-scrolling action"). "for a {genre} game" 문구로 반영됩니다.</param>
         /// <param name="artStyle">아트 스타일/분위기(선택, 자유 텍스트, 예: "SD chibi, dark fantasy"). 스타일 유지 문장에 삽입됩니다.</param>
@@ -108,7 +121,7 @@ namespace MCPTools.Editor
             string characterDescription,
             List<SpriteSheetRowDef> rows,
             int cellSize,
-            bool faceRight,
+            SpriteSheetFacing facing,
             bool whiteBackground,
             string gameGenre = null,
             string artStyle = null,
@@ -143,7 +156,16 @@ namespace MCPTools.Editor
                 throw new ArgumentException("셀 크기(cellSize)는 32 이상이어야 합니다.");
             }
 
-            string direction = faceRight ? "RIGHT" : "LEFT";
+            bool isFront = facing == SpriteSheetFacing.Front;
+            // 정면은 측면(side-scrolling/side-view) 전제가 맞지 않으므로 시트 종류·시점 문구를 함께 바꾼다.
+            string sheetKind = isFront ? "2D sprite sheet" : "2D side-scrolling sprite sheet";
+            string viewSentence = isFront
+                ? "Create a clean orthographic front-view sprite sheet. "
+                : "Create a clean orthographic side-view sprite sheet. ";
+            string facingSentence = isFront
+                ? "The character must face FORWARD, directly toward the viewer, in every frame only — " +
+                  "keep the front view with no turning, no profile, and no three-quarter angle. "
+                : $"The character should face {(facing == SpriteSheetFacing.Left ? "LEFT" : "RIGHT")} in every frame only. ";
             string genre = (gameGenre ?? string.Empty).Trim();
             string style = (artStyle ?? string.Empty).Trim();
             string notes = (extraNotes ?? string.Empty).Trim();
@@ -154,7 +176,7 @@ namespace MCPTools.Editor
             if (useReferenceImage)
             {
                 sb.AppendLine("Use the attached reference image as the exact character design reference.");
-                sb.Append($"Generate a full-body 2D side-scrolling sprite sheet{genrePhrase} for Unity using this character. ");
+                sb.Append($"Generate a full-body {sheetKind}{genrePhrase} for Unity using this character. ");
                 sb.Append(style.Length > 0
                     ? $"Keep the character in the same style as the reference image, rendered with a {style} art style and mood. "
                     : "Keep the character in the same style as the reference image. ");
@@ -165,7 +187,7 @@ namespace MCPTools.Editor
             }
             else
             {
-                sb.Append($"Generate a full-body 2D side-scrolling sprite sheet{genrePhrase} for Unity of the following character: ");
+                sb.Append($"Generate a full-body {sheetKind}{genrePhrase} for Unity of the following character: ");
                 sb.Append(characterDescription.Trim());
                 sb.Append(". ");
                 if (style.Length > 0)
@@ -177,8 +199,8 @@ namespace MCPTools.Editor
             sb.AppendLine("The character must remain visually consistent across all frames.");
 
             // 2) 카메라/구도 고정 지시
-            sb.Append("Create a clean orthographic side-view sprite sheet. ");
-            sb.Append($"The character should face {direction} in every frame only. ");
+            sb.Append(viewSentence);
+            sb.Append(facingSentence);
             sb.Append("Full body must be visible in every frame. ");
             sb.Append("Keep the camera fixed, keep the character at a consistent scale, keep the ground level consistent, ");
             sb.Append("and keep the body centered within each frame. ");
@@ -212,7 +234,7 @@ namespace MCPTools.Editor
             sb.AppendLine("Arrange the sprite sheet in separate animation rows:");
             for (int i = 0; i < rows.Count; i++)
             {
-                sb.AppendLine($"Row {i + 1}: {RowLabel(rows[i].action)}, {rows[i].frameCount} frames. {ActionDirective(rows[i].action)}");
+                sb.AppendLine($"Row {i + 1}: {RowLabel(rows[i].action)}, {rows[i].frameCount} frames. {ActionDirective(rows[i].action, isFront)}");
             }
 
             // 5) 공통 요구사항
@@ -253,7 +275,7 @@ namespace MCPTools.Editor
             string characterDescription,
             List<SpriteSheetRowDef> rows,
             int cellSize,
-            bool faceRight,
+            SpriteSheetFacing facing,
             bool whiteBackground,
             string gameGenre,
             string artStyle,
@@ -261,7 +283,7 @@ namespace MCPTools.Editor
         {
             // 게임 컨텍스트 없이 조립한 템플릿을 "검증된 구조 예시"로 포함한다.
             string templateExample = BuildPrompt(
-                useReferenceImage, characterDescription, rows, cellSize, faceRight, whiteBackground);
+                useReferenceImage, characterDescription, rows, cellSize, facing, whiteBackground);
 
             string genre = (gameGenre ?? string.Empty).Trim();
             string style = (artStyle ?? string.Empty).Trim();
@@ -274,6 +296,8 @@ namespace MCPTools.Editor
             sb.AppendLine("A verified prompt structure is provided below as an example. You MUST keep every part of that structure intact:");
             sb.AppendLine("- The reference-image / character description instruction at the top (keep it exactly as given).");
             sb.AppendLine("- The fixed camera, consistent scale, consistent ground level, and centered-body instructions.");
+            sb.AppendLine($"- The {(facing == SpriteSheetFacing.Front ? "front-view" : "side-view")} and facing-direction instruction " +
+                          "exactly as given (never change the viewpoint or the direction the character faces).");
             sb.AppendLine($"- The uniform grid instruction with exactly {cellSize}x{cellSize} pixel cells including the empty padding, identical for every cell.");
             sb.AppendLine("- The per-row animation definitions (Row 1, Row 2, ...) with the same actions and frame counts.");
             sb.AppendLine("- The full \"Important requirements:\" list.");
@@ -327,7 +351,7 @@ namespace MCPTools.Editor
             string characterDescription,
             List<SpriteSheetRowDef> rows,
             int cellSize,
-            bool faceRight,
+            SpriteSheetFacing facing,
             bool whiteBackground,
             string prompt,
             string gameGenre = null,
@@ -365,7 +389,7 @@ namespace MCPTools.Editor
                         { "extraNotes", extraNotes ?? string.Empty },
                         { "rows", rowDocs },
                         { "cellSize", cellSize },
-                        { "direction", faceRight ? "right" : "left" },
+                        { "direction", DirectionKey(facing) },
                         { "background", whiteBackground ? "white" : "transparent" },
                         { "layout", "multi-row uniform grid" }
                     }
@@ -406,14 +430,19 @@ namespace MCPTools.Editor
         }
 
         /// <summary>프리셋별 연출 지시 문구를 반환합니다. (직접 입력 동작은 일반 문구)</summary>
-        private static string ActionDirective(string action)
+        /// <param name="isFront">정면 시점이면 측면 전제 문구(side-walk 등) 대신 정면 문구를 사용합니다.</param>
+        private static string ActionDirective(string action, bool isFront)
         {
             switch (action.Trim().ToLowerInvariant())
             {
                 case "walk":
-                    return "Smooth looping side-walk animation.";
+                    return isFront
+                        ? "Smooth looping walk animation seen from the front, walking toward the viewer."
+                        : "Smooth looping side-walk animation.";
                 case "run":
-                    return "Faster and more energetic than walking, smooth looping animation.";
+                    return isFront
+                        ? "Faster and more energetic than walking, running toward the viewer, smooth looping animation."
+                        : "Faster and more energetic than walking, smooth looping animation.";
                 case "attack":
                     return "One full attack motion with clear anticipation, action, impact, and recovery, returning to the starting pose.";
                 case "idle":
@@ -455,6 +484,29 @@ namespace MCPTools.Editor
 
             if (ranges.Count == 1) return ranges[0];
             return string.Join(", ", ranges.GetRange(0, ranges.Count - 1)) + ", and " + ranges[ranges.Count - 1];
+        }
+
+        /// <summary>방향 값을 저장 문서·MCP 파라미터에 쓰는 키("right"/"left"/"front")로 바꿉니다.</summary>
+        public static string DirectionKey(SpriteSheetFacing facing)
+        {
+            switch (facing)
+            {
+                case SpriteSheetFacing.Left: return "left";
+                case SpriteSheetFacing.Front: return "front";
+                default: return "right";
+            }
+        }
+
+        /// <summary>"right"/"left"/"front" 문자열을 방향 값으로 파싱합니다. (비어 있거나 알 수 없으면 Right)</summary>
+        public static SpriteSheetFacing ParseFacing(string direction)
+        {
+            switch ((direction ?? string.Empty).Trim().ToLowerInvariant())
+            {
+                case "left": return SpriteSheetFacing.Left;
+                case "front":
+                case "forward": return SpriteSheetFacing.Front;
+                default: return SpriteSheetFacing.Right;
+            }
         }
 
         /// <summary>동작명을 슬라이스/파일 이름에 쓸 수 있게 소문자·언더스코어로 정리합니다.</summary>

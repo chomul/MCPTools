@@ -26,7 +26,8 @@ namespace MCPTools.Editor
                 "genre(선택 — 게임 장르 영어 자유 텍스트, 예: \"side-scrolling action\" — \"for a {genre} game\" 문구로 반영), " +
                 "artStyle(선택 — 아트 스타일/분위기 영어 자유 텍스트, 예: \"SD chibi, dark fantasy\"), " +
                 "notes(선택 — 추가 참고 사항, Important requirements에 부가 지시로 반영), " +
-                "cellSize(선택, 기본 256), direction(선택, right/left, 기본 right), background(선택, white/transparent, 기본 white).",
+                "cellSize(선택, 기본 256), direction(선택, right/left/front, 기본 right — front는 정면 시점이라 " +
+                "side-view 대신 front-view 문구로 조립됩니다), background(선택, white/transparent, 기본 white).",
                 ExecuteBuildPrompt);
 
             McpToolRegistry.Register(
@@ -74,7 +75,7 @@ namespace MCPTools.Editor
             bool useReferenceImage = GetBool(parameters, "useReferenceImage", true);
             string characterDescription = GetString(parameters, "characterDescription") ?? string.Empty;
             int cellSize = GetInt(parameters, "cellSize", 256);
-            bool faceRight = !string.Equals(GetString(parameters, "direction"), "left", StringComparison.OrdinalIgnoreCase);
+            SpriteSheetFacing facing = SpriteSheetPromptBuilder.ParseFacing(GetString(parameters, "direction"));
             bool whiteBackground = ParseBackground(GetString(parameters, "background"));
             string genre = GetString(parameters, "genre") ?? string.Empty;
             string artStyle = GetString(parameters, "artStyle") ?? string.Empty;
@@ -82,10 +83,10 @@ namespace MCPTools.Editor
 
             // MCP 경로는 호출 주체가 이미 AI이므로 CLI를 재호출하지 않고 템플릿 방식으로 게임 컨텍스트를 반영한다.
             string prompt = SpriteSheetPromptBuilder.BuildPrompt(
-                useReferenceImage, characterDescription, rows, cellSize, faceRight, whiteBackground,
+                useReferenceImage, characterDescription, rows, cellSize, facing, whiteBackground,
                 genre, artStyle, notes);
             string savedPath = SpriteSheetPromptBuilder.SavePromptJson(
-                useReferenceImage, characterDescription, rows, cellSize, faceRight, whiteBackground, prompt,
+                useReferenceImage, characterDescription, rows, cellSize, facing, whiteBackground, prompt,
                 genre, artStyle, notes, "template");
 
             var rowSummaries = new List<object>();

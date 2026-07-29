@@ -529,7 +529,8 @@ namespace MCPTools.Editor
                       "외부 AI(이미지 생성)에 붙여넣어 시트를 만든 뒤 mcptools_spritesheet_import로 가져옵니다. " +
                       "파라미터: rows(선택, \"walk:8,run:8,attack:8,death:10\" 형식), useReferenceImage(선택, 기본 true), " +
                       "characterDescription(선택 — useReferenceImage=false면 필수), genre(선택), artStyle(선택), notes(선택), " +
-                      "cellSize(선택, 기본 256), direction(선택, right/left, 기본 right), background(선택, white/transparent, 기본 white).")]
+                      "cellSize(선택, 기본 256), direction(선택, right/left/front, 기본 right — front는 정면 시점이라 " +
+                      "side-view 대신 front-view 문구로 조립됩니다), background(선택, white/transparent, 기본 white).")]
     public static class McpToolsSpriteSheetBuildPromptTool
     {
         /// <summary>MCP for Unity 스키마 생성용 파라미터 정의입니다(리플렉션으로 읽힘).</summary>
@@ -564,7 +565,7 @@ namespace MCPTools.Editor
             public int cellSize { get; set; }
 
             /// <summary>캐릭터 방향.</summary>
-            [ToolParameter("캐릭터 방향 (right/left). 기본 right.", Required = false, DefaultValue = "right")]
+            [ToolParameter("캐릭터 방향 (right/left/front). 기본 right. front는 정면(front view) 시트로 조립됩니다.", Required = false, DefaultValue = "right")]
             public string direction { get; set; }
 
             /// <summary>배경.</summary>
