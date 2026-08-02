@@ -1,0 +1,28 @@
+{
+    "name": "AIAssetPipeline.Editor.McpForUnity",
+    "rootNamespace": "AIAssetPipeline.Editor",
+    "references": [
+        "AIAssetPipeline.Runtime",
+        "AIAssetPipeline.Editor",
+        "MCPForUnity.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "AIASSETPIPELINE_HAS_MCPFORUNITY"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.coplaydev.unity-mcp",
+            "expression": "0.0.0",
+            "define": "AIASSETPIPELINE_HAS_MCPFORUNITY"
+        }
+    ],
+    "noEngineReferences": false
+}

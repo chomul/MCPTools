@@ -2,7 +2,7 @@
 # =============================================================================
 # 릴리스절차 대응: "커밋 전 점검 목록 > 개인 값 미포함"
 #
-#  (a) MCPToolSettings.asset 커밋 여부 — .gitignore 대상인데 실수로 추가되면
+#  (a) AIAssetPipelineSettings.asset 커밋 여부 — .gitignore 대상인데 실수로 추가되면
 #      개발자 PC 의 ComfyUI 주소·경로·모델명이 그대로 배포된다.
 #  (b) 패키지 코드에 사용자 환경 절대 경로 하드코딩 여부.
 #
@@ -22,13 +22,17 @@ CHECK_NAME="개인 값·절대 경로"
 
 problems=""
 
-# --- (a) MCPToolSettings.asset 커밋 여부 (릴리스절차의 명령과 동일) --------------
-settings_hits="$(git ls-files | grep -i 'MCPToolSettings\.asset')"
+# --- (a) 설정 에셋 커밋 여부 (릴리스절차의 명령과 동일) ------------------------------
+# 파일명을 고정하지 않고 "설정 ScriptableObject 로 보이는 .asset" 을 전부 본다.
+# v0.6.1 이하의 옛 이름(MCPToolSettings.asset)이 .gitignore 규칙만 이름이 바뀐 채
+# 계속 추적되던 사고가 있었다 — 무시 규칙은 이미 추적 중인 파일을 되돌리지 못한다.
+# 패키지에 배포용 .asset 은 하나도 없어야 하므로 이름을 좁히지 않는다.
+settings_hits="$(git ls-files 'MCPToolTest/Assets/AIAssetPipeline/*' | grep -i '\.asset$')"
 if [ -n "$settings_hits" ]; then
   echo "$settings_hits"
-  problems="${problems}${problems:+ / }MCPToolSettings.asset 가 커밋되어 있음(.gitignore 대상)"
+  problems="${problems}${problems:+ / }패키지에 .asset 이 커밋되어 있음(개인 설정 에셋일 수 있음 — .gitignore 확인)"
 else
-  echo "  OK   MCPToolSettings.asset 미추적"
+  echo "  OK   패키지에 커밋된 .asset 없음(설정 에셋 미추적)"
 fi
 
 # --- (b) 사용자 환경 절대 경로 하드코딩 ------------------------------------------
@@ -39,8 +43,8 @@ NIX_PATH_RE='(^|[^A-Za-z0-9_.~-])(/home/|/Users/)[A-Za-z0-9._-]+/'
 
 path_hits="$(
   git ls-files -z -- \
-      'MCPToolTest/Assets/MCPTools/*.cs' \
-      'MCPToolTest/Assets/MCPTools/Editor/ComfyUIGenerator/Server~/*.py' \
+      'MCPToolTest/Assets/AIAssetPipeline/*.cs' \
+      'MCPToolTest/Assets/AIAssetPipeline/Editor/ComfyUIGenerator/Server~/*.py' \
     | xargs -0 -r grep -nIE "$WIN_PATH_RE|$NIX_PATH_RE"
 )"
 
@@ -49,10 +53,10 @@ if [ -n "$path_hits" ]; then
   hit_count="$(printf '%s\n' "$path_hits" | wc -l | tr -d ' ')"
   problems="${problems}${problems:+ / }절대 경로 하드코딩 의심 ${hit_count}건(위 목록)"
 else
-  scanned="$(git ls-files -- 'MCPToolTest/Assets/MCPTools/*.cs' 'MCPToolTest/Assets/MCPTools/Editor/ComfyUIGenerator/Server~/*.py' | wc -l | tr -d ' ')"
+  scanned="$(git ls-files -- 'MCPToolTest/Assets/AIAssetPipeline/*.cs' 'MCPToolTest/Assets/AIAssetPipeline/Editor/ComfyUIGenerator/Server~/*.py' | wc -l | tr -d ' ')"
   echo "  OK   소스 ${scanned}개에 사용자 환경 절대 경로 없음"
 fi
 
 [ -n "$problems" ] && fail "$problems"
 
-pass "MCPToolSettings.asset 미커밋 + 패키지 소스에 사용자 환경 절대 경로 없음"
+pass "패키지에 커밋된 .asset 없음 + 패키지 소스에 사용자 환경 절대 경로 없음"

@@ -14,7 +14,7 @@ CHECK_NAME=".meta 누락"
 
 # docs/릴리스절차.md 의 명령 (결과가 비어야 정상)
 missing="$(
-  git ls-files 'MCPToolTest/Assets/MCPTools/*' | grep -v '\.meta$' | grep -v 'Server~' \
+  git ls-files 'MCPToolTest/Assets/AIAssetPipeline/*' | grep -v '\.meta$' | grep -v 'Server~' \
     | while read -r f; do [ -f "$f.meta" ] || echo "META 누락: $f"; done
 )"
 
@@ -24,5 +24,5 @@ if [ -n "$missing" ]; then
   fail ".meta 가 없는 패키지 파일 ${count}개 (위 목록) — Unity 에디터를 한 번 열어 .meta 를 생성시킨 뒤 커밋하세요"
 fi
 
-checked="$(git ls-files 'MCPToolTest/Assets/MCPTools/*' | grep -v '\.meta$' | grep -cv 'Server~')"
+checked="$(git ls-files 'MCPToolTest/Assets/AIAssetPipeline/*' | grep -v '\.meta$' | grep -cv 'Server~')"
 pass "패키지 추적 파일 ${checked}개 모두 .meta 짝이 맞습니다"

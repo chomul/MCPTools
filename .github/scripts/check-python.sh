@@ -10,7 +10,7 @@ CHECK_NAME="Python 문법"
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
-PY="MCPToolTest/Assets/MCPTools/Editor/ComfyUIGenerator/Server~/bridge_server.py"
+PY="MCPToolTest/Assets/AIAssetPipeline/Editor/ComfyUIGenerator/Server~/bridge_server.py"
 [ -f "$PY" ] || fail "$PY 파일이 없습니다"
 [ -n "$PYTHON" ] || fail "Python 3 실행 파일을 찾지 못했습니다"
 

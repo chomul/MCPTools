@@ -2,8 +2,8 @@
 # =============================================================================
 # 릴리스절차 대응: "버전 3중 동기 (가장 중요)"
 #
-#   1) MCPToolTest/Assets/MCPTools/package.json 의 version
-#   2) MCPToolTest/Assets/MCPTools/Runtime/Data/MCPToolsInfo.cs 의 Version 상수
+#   1) MCPToolTest/Assets/AIAssetPipeline/package.json 의 version
+#   2) MCPToolTest/Assets/AIAssetPipeline/Runtime/Data/AIAssetPipelineInfo.cs 의 Version 상수
 #   3) git 태그 vX.Y.Z
 #
 # 1↔2 는 항상 비교한다. 3 은 "태그 push 이벤트"일 때만 (v 접두어를 뗀 뒤) 함께
@@ -15,8 +15,8 @@ CHECK_NAME="버전 3중 동기"
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
-PKG_JSON="MCPToolTest/Assets/MCPTools/package.json"
-INFO_CS="MCPToolTest/Assets/MCPTools/Runtime/Data/MCPToolsInfo.cs"
+PKG_JSON="MCPToolTest/Assets/AIAssetPipeline/package.json"
+INFO_CS="MCPToolTest/Assets/AIAssetPipeline/Runtime/Data/AIAssetPipelineInfo.cs"
 
 [ -f "$PKG_JSON" ] || fail "$PKG_JSON 파일이 없습니다"
 [ -f "$INFO_CS" ]  || fail "$INFO_CS 파일이 없습니다"
@@ -37,11 +37,11 @@ if [ -z "$tag_name" ] && [ "${GITHUB_REF_TYPE:-}" = "tag" ]; then
 fi
 
 echo "  package.json    version = $pkg_version"
-echo "  MCPToolsInfo.cs Version = $info_version"
+echo "  AIAssetPipelineInfo.cs Version = $info_version"
 [ -n "$tag_name" ] && echo "  git tag                 = $tag_name"
 
 if [ "$pkg_version" != "$info_version" ]; then
-  fail "package.json($pkg_version) 과 MCPToolsInfo.Version($info_version) 이 다릅니다 — 두 곳을 같은 값으로 맞추세요"
+  fail "package.json($pkg_version) 과 AIAssetPipelineInfo.Version($info_version) 이 다릅니다 — 두 곳을 같은 값으로 맞추세요"
 fi
 
 if [ -n "$tag_name" ]; then
@@ -51,9 +51,9 @@ if [ -n "$tag_name" ]; then
   esac
   tag_version="${tag_name#v}"
   if [ "$tag_version" != "$pkg_version" ]; then
-    fail "태그($tag_name) 와 package.json($pkg_version)·MCPToolsInfo($info_version) 버전이 다릅니다"
+    fail "태그($tag_name) 와 package.json($pkg_version)·AIAssetPipelineInfo($info_version) 버전이 다릅니다"
   fi
-  pass "3중 동기 OK — package.json / MCPToolsInfo / 태그 모두 $pkg_version"
+  pass "3중 동기 OK — package.json / AIAssetPipelineInfo / 태그 모두 $pkg_version"
 fi
 
-pass "package.json ↔ MCPToolsInfo.Version 일치 ($pkg_version) — 태그 push 가 아니므로 태그 비교는 건너뜁니다"
+pass "package.json ↔ AIAssetPipelineInfo.Version 일치 ($pkg_version) — 태그 push 가 아니므로 태그 비교는 건너뜁니다"

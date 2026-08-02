@@ -49,12 +49,17 @@ MCPToolTest/crashlytics-build.properties
 # [Python 자동 탐지] 등이 개인 PC 절대 경로를 기록할 수 있어 커밋 금지 (Task7 D14).
 # 없으면 에디터가 기본값으로 자동 생성함.
 # -----------------------------------------------------------------------------
-MCPToolTest/Assets/MCPTools/Editor/Common/MCPToolSettings.asset
-MCPToolTest/Assets/MCPTools/Editor/Common/MCPToolSettings.asset.meta
+MCPToolTest/Assets/AIAssetPipeline/Editor/Common/AIAssetPipelineSettings.asset
+MCPToolTest/Assets/AIAssetPipeline/Editor/Common/AIAssetPipelineSettings.asset.meta
+# v0.6.1 이하의 옛 파일명 — 리네임 전 생성된 에셋이 남아 있을 수 있어 함께 무시한다.
+# (이 이름의 에셋이 실제로 커밋돼 있어 v0.7.0에서 추적 해제했다. 무시 규칙은 이미 추적 중인
+#  파일을 되돌리지 못하므로, 규칙만 있고 파일은 계속 커밋되던 상태였다.)
+MCPToolTest/Assets/AIAssetPipeline/Editor/Common/MCPToolSettings.asset
+MCPToolTest/Assets/AIAssetPipeline/Editor/Common/MCPToolSettings.asset.meta
 
 # 도구가 생성하는 사용자별 설정·오버라이드 폴더 (Task7 U2/U6)
-MCPToolTest/Assets/MCPTools.User/
-MCPToolTest/Assets/MCPTools.User.meta
+MCPToolTest/Assets/AIAssetPipeline.User/
+MCPToolTest/Assets/AIAssetPipeline.User.meta
 
 # -----------------------------------------------------------------------------
 # AI 생성 산출물 작업 데이터 — 재생성 가능하므로 커밋 제외
@@ -93,3 +98,28 @@ MCPToolTest/dev/
 # (원격 github.com/chomul/MCPToolTest 에 초기 커밋 보존됨 — 확인 후 삭제 가능)
 # -----------------------------------------------------------------------------
 .mcptooltest-git-backup/
+
+# -----------------------------------------------------------------------------
+# 배포 저장소 스코프 (v0.7.0~) — GitHub에는 UPM 패키지만 올린다
+#
+# 이 저장소가 추적하는 것은 UPM git URL 설치에 필요한 것뿐이다.
+# Unity 테스트 프로젝트와 기획·Task 문서는 로컬 작업 데이터이므로 추적하지 않는다.
+#
+# ★ 주의: 아래 항목은 GitHub에 백업되지 않는다. 로컬 디스크에만 존재하므로
+#   `git clean -xdf`(추적되지 않는 파일 삭제)를 이 저장소에서 실행하지 말 것.
+# -----------------------------------------------------------------------------
+
+# Unity 테스트 프로젝트 — 패키지 폴더만 남기고 전부 제외
+/MCPToolTest/*
+!/MCPToolTest/Assets/
+/MCPToolTest/Assets/*
+!/MCPToolTest/Assets/AIAssetPipeline/
+!/MCPToolTest/Assets/AIAssetPipeline.meta
+
+# 프로젝트 작업 문서·개발 전용 파일 (배포와 무관)
+/docs/
+/mds/
+/ComfyUI/
+/tools/
+/CLAUDE.md
+/.mcp.json

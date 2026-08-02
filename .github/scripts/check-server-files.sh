@@ -10,7 +10,7 @@ CHECK_NAME="Server~ 필수 파일"
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
-SERVER_DIR="MCPToolTest/Assets/MCPTools/Editor/ComfyUIGenerator/Server~"
+SERVER_DIR="MCPToolTest/Assets/AIAssetPipeline/Editor/ComfyUIGenerator/Server~"
 
 required=(
   "$SERVER_DIR/bridge_server.py"

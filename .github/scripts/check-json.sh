@@ -9,14 +9,15 @@ CHECK_NAME="JSON 유효성"
 # shellcheck source=_lib.sh
 . "$(dirname "$0")/_lib.sh"
 
-SERVER_DIR="MCPToolTest/Assets/MCPTools/Editor/ComfyUIGenerator/Server~"
+SERVER_DIR="MCPToolTest/Assets/AIAssetPipeline/Editor/ComfyUIGenerator/Server~"
 
 [ -n "$PYTHON" ] || fail "Python 3 실행 파일을 찾지 못했습니다"
 
 targets=()
-targets+=("MCPToolTest/Assets/MCPTools/package.json")
+targets+=("MCPToolTest/Assets/AIAssetPipeline/package.json")
 targets+=("$SERVER_DIR/variables.json")
-targets+=("MCPToolTest/Packages/manifest.json")
+# 주의: Unity 테스트 프로젝트(MCPToolTest/Packages/manifest.json 등)는 v0.7.0부터 저장소가
+# 추적하지 않으므로(배포 저장소 스코프, .gitignore 참조) 검사 대상에 넣지 않는다.
 # Server~/workflows/*.json 전체
 while IFS= read -r f; do
   [ -n "$f" ] && targets+=("$f")
@@ -46,4 +47,4 @@ if [ -n "$broken" ]; then
   fail "JSON ${count}개 문제 (첫 항목: $first)"
 fi
 
-pass "JSON ${checked}개 파싱 OK (package.json / manifest.json / Server~ variables·workflows)"
+pass "JSON ${checked}개 파싱 OK (package.json / Server~ variables·workflows)"

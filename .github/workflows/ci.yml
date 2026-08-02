@@ -50,7 +50,7 @@ jobs:
         if: always()
         run: bash .github/scripts/check-meta.sh
 
-      # 릴리스절차 §버전 3중 동기 (package.json ↔ MCPToolsInfo ↔ git 태그)
+      # 릴리스절차 §버전 3중 동기 (package.json ↔ AIAssetPipelineInfo ↔ git 태그)
       # 태그 push 일 때만 GITHUB_REF_TYPE=tag 가 되어 태그까지 3중 비교한다.
       - name: 버전 3중 동기 점검
         if: always()

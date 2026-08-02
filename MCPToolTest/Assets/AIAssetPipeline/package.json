@@ -1,0 +1,21 @@
+{
+  "name": "com.sungchan.aiassetpipeline",
+  "version": "0.7.0",
+  "displayName": "AI Asset Pipeline",
+  "description": "A 4-stage AI asset generation pipeline (AssetListup -> PromptBuilder -> ComfyUIGenerator -> AssetApplier) driven by game design documents, provided as Unity Editor Tools and MCP tools. Generates images/sounds locally via ComfyUI, presents 4 candidates for user selection, and automatically applies the chosen assets to prefabs and uGUI. The uGUI, 2D Sprite, and unity-mcp packages are optional dependencies. (기획서 기반 AI 에셋 생성 4단계 파이프라인을 Unity Editor Tool + MCP 도구로 제공합니다. ComfyUI 로컬 생성, 후보 4개 선택, 프리팹/UI 자동 적용을 지원하며 uGUI·2D Sprite·unity-mcp 패키지는 선택 사항입니다.)",
+  "unity": "6000.5",
+  "author": {
+    "name": "sungchan"
+  },
+  "documentationUrl": "https://github.com/chomul/Unity-AIAssetPipeline/blob/main/MCPToolTest/Assets/AIAssetPipeline/README.md",
+  "changelogUrl": "https://github.com/chomul/Unity-AIAssetPipeline/blob/main/MCPToolTest/Assets/AIAssetPipeline/CHANGELOG.md",
+  "licensesUrl": "https://github.com/chomul/Unity-AIAssetPipeline/blob/main/MCPToolTest/Assets/AIAssetPipeline/LICENSE.md",
+  "dependencies": {},
+  "keywords": [
+    "mcp",
+    "comfyui",
+    "ai",
+    "asset-pipeline",
+    "editor-tool"
+  ]
+}

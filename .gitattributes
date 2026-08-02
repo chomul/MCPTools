@@ -83,6 +83,6 @@
 *.exe             binary
 
 # 대용량 바이너리(5MB 초과)가 늘어나면 Git LFS 도입을 검토하되,
-# **패키지 폴더(MCPToolTest/Assets/MCPTools/) 안의 파일에는 LFS를 절대 쓰지 말 것** —
+# **패키지 폴더(MCPToolTest/Assets/AIAssetPipeline/) 안의 파일에는 LFS를 절대 쓰지 말 것** —
 # Unity Package Manager의 git URL 설치는 LFS를 지원하지 않아
 # 사용자에게 실제 파일 대신 LFS 포인터 텍스트가 내려간다 (Task7 U12).
